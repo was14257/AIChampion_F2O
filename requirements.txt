@@ -1,0 +1,8 @@
+# RETFound disc/cup 세그멘테이션 파이프라인 의존성
+# GPU(CUDA) 환경 기준. torch 는 본인 CUDA 버전에 맞는 빌드를 설치하세요.
+#   예) CUDA 12.1: pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=2.1
+timm>=0.9.12
+numpy>=1.24
+pillow>=10.0
+scipy>=1.10        # 연결요소 후처리(없어도 동작은 함)

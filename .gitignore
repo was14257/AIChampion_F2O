@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# 가상환경
+.venv/
+venv/
+env/
+
+# 모델 가중치 / 큰 파일 (필요시 주석 해제)
+# *.pth
+# *.pt
+# *.ckpt
+
+# 로컬 설정
+local_config.py
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
