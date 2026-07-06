@@ -1,0 +1,27 @@
+# 데이터 (친구가 로컬에 직접 배치 — 용량 크고 라이선스 문제로 git에 올리지 않음)
+grape_annotated/
+grape_cfps.zip
+grape_annotated.zip
+*.zip
+REFUGE2/
+GRAPE/
+data_root/
+
+# 사전학습 가중치 / 학습 체크포인트
+*.pth
+*.pt
+runs/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+.claude/
