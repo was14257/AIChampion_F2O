@@ -19,7 +19,7 @@ def load_model(device):
     ckpt_path = CFG.infer.checkpoint_path
     if not ckpt_path.exists():
         raise FileNotFoundError(
-            f"체크포인트 없음: {ckpt_path}\n먼저 `python train.py` 로 학습하세요.")
+            f"Checkpoint not found: {ckpt_path}\nRun `python train.py` first to train.")
     model = build_model(load_weights=False).to(device)
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model"])
@@ -91,9 +91,9 @@ def run_single(image: str):
     CFG.paths.ensure_dirs()
     out = CFG.paths.pred_dir / f"{img_path.stem}_contour.png"
     save_contour_overlay(img_path, pred, out)
-    print(f"\n이미지: {img_path.name}")
-    print(f"예측 C/D ratio ({CFG.infer.cdr_kind}) = {cdr:.4f}")
-    print(f"경계선 오버레이 저장: {out}")
+    print(f"\nImage: {img_path.name}")
+    print(f"Predicted C/D ratio ({CFG.infer.cdr_kind}) = {cdr:.4f}")
+    print(f"Contour overlay saved: {out}")
 
 
 def run_split(split: str, save_vis: bool = False):
@@ -155,9 +155,9 @@ def run_split(split: str, save_vis: bool = False):
     print(f"  C/D ratio({CFG.infer.cdr_kind})")
     print(f"  MAE (pred vs GT-mask) = {mae:.4f}")
     print(f"  Pearson r            = {corr:.4f}")
-    print(f"  결과 CSV: {csv_path}")
+    print(f"  Result CSV: {csv_path}")
     if save_vis:
-        print(f"  경계선 오버레이: {vis_dir}")
+        print(f"  Contour overlays: {vis_dir}")
 
 
 def main():

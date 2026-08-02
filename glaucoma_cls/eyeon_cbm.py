@@ -1,0 +1,88 @@
+"""EYEON concept extractor: extracts 9 concepts using 2 independent RETFound encoders.
+
+Originally EyeonCBM from cbm/model.py with the risk_head
+(ConceptBottleneckRiskHead)/CQR/calibration parts stripped out entirely. The
+actual server (app_streamlit.py) computes risk via glaucoma_cls.GlaucomaNet,
+and this class only extracts the 9 concepts (risk_head/concept_stats/
+cqr_correction used to exist here but were dead code referenced nowhere).
+
+The seg encoder (512 input, trained under retfound_seg) and the
+OCT-regression encoder (224 input, trained under bscan_gen) have different
+img_size and are separate models with separate weights from the start, so
+they can't be shared (merging into one would require retraining seg at 224
+with a risk of dropping Dice, so we keep the two validated weight sets
+as-is).
+
+3 forward passes:
+  1) whole fundus -> seg encoder(512) -> disc/cup mask -> 6 concepts (CDR/ovality etc.)
+  2) whole fundus -> oct encoder(224) -> whole embedding
+  3) disc crop     -> oct encoder(224) -> disc embedding
+     -> whole+disc concat -> oct_linear -> 3 concepts (mean_th/ilm_rough/fovea_curv)
+"""
+import numpy as np
+import torch
+import torch.nn as nn
+from PIL import Image
+
+from bscan_gen.utils import disc_crop, embed_fundus
+from glaucoma_cls.concepts import seg_concepts, OCT_CONCEPTS, ALL_CONCEPTS  # noqa: F401
+from retfound_seg.cdr import postprocess_label
+from retfound_seg.model import RetFoundSegmenter
+
+
+class EyeonCBM(nn.Module):
+    """Inference wrapper bundling seg_model / oct_encoder+oct_linear to extract the 9 concepts.
+
+    seg_model: retfound_seg.model.RetFoundSegmenter (loads existing weights, 512 input)
+    oct_encoder: 224-input RETFound built via bscan_gen.utils.load_retfound_encoder()
+    oct_linear: nn.Linear built via glaucoma_cls.concepts.fit_oct_linear() (whole+disc input)
+    """
+
+    def __init__(self, seg_model: RetFoundSegmenter, oct_encoder: nn.Module,
+                 oct_linear: nn.Linear, disc_x_fallback_ratio: float = 0.5):
+        super().__init__()
+        self.seg_model = seg_model
+        self.oct_encoder = oct_encoder
+        self.oct_linear = oct_linear
+        self.disc_x_fallback_ratio = disc_x_fallback_ratio
+
+    def _disc_x_from_mask(self, label_map: np.ndarray, img_w: int) -> int:
+        disc = label_map >= 1
+        if disc.sum() == 0:
+            return int(img_w * self.disc_x_fallback_ratio)
+        cols = np.where(disc.any(axis=0))[0]
+        seg_w = label_map.shape[1]
+        return int((cols.min() + cols.max()) / 2 / seg_w * img_w)
+
+    @torch.no_grad()
+    def predict_from_path(self, img_path: str, device: str = "cpu") -> dict:
+        """One fundus image path -> {concept name: value} (9 total)."""
+        img = Image.open(img_path).convert("RGB")
+
+        # --- pass 1: whole -> segmentation -> 6 geometric concepts ---
+        seg_input = _preprocess_from_image(img, device)
+        logits = self.seg_model(seg_input)
+        label_map = postprocess_label(logits.argmax(dim=1)[0].cpu().numpy())
+        seg_out = seg_concepts(label_map)
+
+        # --- pass 2/3: disc crop -> whole+disc embedding (224 encoder) -> 3 OCT concepts ---
+        dx = self._disc_x_from_mask(label_map, img.width)
+        cropped = disc_crop(img, dx)
+        whole_emb = embed_fundus(self.oct_encoder, img)
+        disc_emb = embed_fundus(self.oct_encoder, cropped)
+        dual = np.concatenate([whole_emb, disc_emb])[None, :]
+        oct_pred = self.oct_linear(torch.from_numpy(dual).float().to(device))[0]
+        oct_out = dict(zip(OCT_CONCEPTS, oct_pred.tolist()))
+
+        return {**seg_out, **oct_out}
+
+
+def _preprocess_from_image(img: Image.Image, device):
+    from config import CFG
+    size = CFG.data.img_size
+    arr = np.asarray(img.resize((size, size), Image.BILINEAR), dtype=np.float32) / 255.0
+    t = torch.from_numpy(arr).permute(2, 0, 1)
+    mean = torch.tensor(CFG.data.mean).view(3, 1, 1)
+    std = torch.tensor(CFG.data.std).view(3, 1, 1)
+    t = (t - mean) / std
+    return t.unsqueeze(0).to(device)

@@ -59,7 +59,7 @@ def main():
 
     n_gpus = torch.cuda.device_count()
     if n_gpus > 1:
-        print(f"DataParallel: GPU {n_gpus}개 사용")
+        print(f"DataParallel: using {n_gpus} GPUs")
         model = torch.nn.DataParallel(model)
     _model = model.module if n_gpus > 1 else model
 
@@ -119,13 +119,13 @@ def main():
                 "cup_dice": cup_dice,
             }
             torch.save(ckpt, CFG.paths.ckpt_dir / "best.pth")
-            print(f"    -> best 저장 (mean_dice={mean_dice:.4f})")
+            print(f"    -> saved best (mean_dice={mean_dice:.4f})")
         if not tc.save_best_only:
-            torch.save({"model": model.state_dict(), "epoch": epoch},
+            torch.save({"model": _model.state_dict(), "epoch": epoch},
                        CFG.paths.ckpt_dir / f"epoch_{epoch+1:03d}.pth")
 
-    print(f"\n학습 완료. best mean_dice = {best_metric:.4f}")
-    print(f"체크포인트: {CFG.paths.ckpt_dir / 'best.pth'}")
+    print(f"\nTraining complete. best mean_dice = {best_metric:.4f}")
+    print(f"Checkpoint: {CFG.paths.ckpt_dir / 'best.pth'}")
 
 
 if __name__ == "__main__":

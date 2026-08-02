@@ -36,7 +36,7 @@ def predict_disc_mask(model, img_pil: Image.Image, seg_size: int,
     logits = model(t)
     pred = logits.argmax(dim=1)[0]
 
-    disc_mask = (pred >= 1).cpu().numpy().astype(np.uint8)
+    disc_mask = (pred >= CFG.data.label_disc_rim).cpu().numpy().astype(np.uint8)
 
     disc_pil = Image.fromarray(disc_mask * 255).resize(
         (orig_w, orig_h), Image.NEAREST
@@ -82,7 +82,7 @@ def disc_bbox_crop(img_pil: Image.Image, disc_mask: np.ndarray,
 def crop_all(margin: float = 1.5, out_size: int = 448):
     device = torch.device(CFG.runtime.device)
     seg_size = CFG.data.img_size
-    ckpt_path = CFG.paths.ckpt_dir / "best.pth"
+    ckpt_path = CFG.infer.checkpoint_path
 
     print(f"Segmentation checkpoint: {ckpt_path}")
     model = load_seg_model(ckpt_path, device)
@@ -93,9 +93,9 @@ def crop_all(margin: float = 1.5, out_size: int = 448):
 
     imgs = sorted(cfp_dir.glob("*.jpg")) + sorted(cfp_dir.glob("*.png"))
     if not imgs:
-        raise FileNotFoundError(f"GRAPE CFP 이미지를 찾지 못함: {cfp_dir}")
+        raise FileNotFoundError(f"No GRAPE CFP images found: {cfp_dir}")
 
-    print(f"처리할 이미지: {len(imgs)}장  →  {out_dir}")
+    print(f"Images to process: {len(imgs)}  ->  {out_dir}")
 
     fallback_cnt = 0
     for i, p in enumerate(imgs, 1):
@@ -114,9 +114,9 @@ def crop_all(margin: float = 1.5, out_size: int = 448):
         if i % 20 == 0 or i == len(imgs):
             print(f"  [{i}/{len(imgs)}] {p.name}  disc_px={disc_mask.sum()}")
 
-    print(f"\n완료: {len(imgs)}장 저장 → {out_dir}")
+    print(f"\nDone: {len(imgs)} images saved -> {out_dir}")
     if fallback_cnt:
-        print(f"  경고: disc 미검출 fallback {fallback_cnt}장 (중앙 crop 적용)")
+        print(f"  Warning: disc not detected, fallback for {fallback_cnt} images (center crop applied)")
 
 
 if __name__ == "__main__":

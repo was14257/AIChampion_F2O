@@ -68,7 +68,7 @@ def main():
         save_contour_overlay(p, pred, out_dir / f"{p.stem}_overlay.png")
         if i % 25 == 0 or i == len(imgs):
             print(f"  {i}/{len(imgs)}  {p.stem} CDR={cdr:.3f}")
-    print(f"\n완료: {len(imgs)}장 → {out_dir}")
+    print(f"\nDone: {len(imgs)} images -> {out_dir}")
 
 
 if __name__ == "__main__":

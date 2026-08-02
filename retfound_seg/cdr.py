@@ -66,4 +66,4 @@ def compute_cdr(label_map: np.ndarray, kind: str | None = None) -> float:
         return vertical_cdr(label_map)
     if kind == "area":
         return area_cdr(label_map)
-    raise ValueError(f"cdr_kind 는 'vertical' 또는 'area': {kind}")
+    raise ValueError(f"cdr_kind must be 'vertical' or 'area': {kind}")

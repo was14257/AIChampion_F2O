@@ -43,13 +43,13 @@ def central_bscan(volume_dir: Path, center: int = 128) -> Path | None:
 def main():
     print(f"GAMMA_ROOT = {GAMMA_ROOT}")
     cases = list_cases(GAMMA_ROOT)
-    print(f"페어링된 케이스: {len(cases)}개")
+    print(f"Paired cases: {len(cases)}")
     if not cases:
-        print("케이스를 찾지 못함. 경로를 확인하세요.")
+        print("No cases found. Check the path.")
         return
 
     n_slices = len(list(cases[0][2].glob("*_image.jpg")))
-    print(f"케이스당 B-scan 슬라이스: {n_slices}장 (중앙 index={PREVIEW_CENTER})")
+    print(f"B-scan slices per case: {n_slices} (center index={PREVIEW_CENTER})")
 
     n = min(PREVIEW_N, len(cases))
     fig, axes = plt.subplots(n, 2, figsize=(10, 3 * n))
@@ -71,7 +71,7 @@ def main():
     plt.tight_layout()
     out = Path("gamma_pair_preview.png")
     plt.savefig(out, dpi=90)
-    print(f"미리보기 저장: {out.resolve()}")
+    print(f"Preview saved: {out.resolve()}")
 
 
 if __name__ == "__main__":

@@ -31,6 +31,25 @@ def gamma_fundus_path(cid: str, root: Path | None = None):
     return None
 
 
+def pick_per_volume(files, n_per_vol):
+    """볼륨(cid)별로 균등 간격 슬라이스 n_per_vol개만 골라 인접 중복을 줄인다."""
+    if not n_per_vol:
+        return files
+    groups = {}
+    for f in files:
+        cid, si = f.stem.split("_")
+        groups.setdefault(cid, []).append((int(si), f))
+    picked = []
+    for cid, items in groups.items():
+        items.sort(key=lambda t: t[0])
+        if len(items) <= n_per_vol:
+            picked.extend(f for _, f in items)
+        else:
+            idx = np.linspace(0, len(items) - 1, n_per_vol).astype(int)
+            picked.extend(items[i][1] for i in idx)
+    return sorted(picked, key=lambda f: f.stem)
+
+
 def qc_ok(d, thickness_range=(40, 220), max_jump=40) -> bool:
     th = np.median(d["rpe"] - d["ilm"])
     jump = max(np.max(np.abs(np.diff(d["ilm"]))), np.max(np.abs(np.diff(d["rpe"]))))

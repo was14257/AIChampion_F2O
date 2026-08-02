@@ -29,7 +29,7 @@ def _interpolate_pos_embed(encoder: nn.Module, state: dict) -> dict:
                          align_corners=False)
     grid = grid.permute(0, 2, 3, 1).reshape(1, new * new, dim)
     state["pos_embed"] = torch.cat([extra, grid], dim=1)
-    print(f"[RETFound] pos_embed 보간: {orig}x{orig} -> {new}x{new}")
+    print(f"[RETFound] pos_embed interpolated: {orig}x{orig} -> {new}x{new}")
     return state
 
 
@@ -48,8 +48,8 @@ def load_retfound_encoder(weights_path: Path | None = None,
 
     if not Path(weights_path).exists():
         raise FileNotFoundError(
-            f"RETFound 가중치를 찾을 수 없음: {weights_path}\n"
-            "RETFound_DOWNLOAD.md 를 보고 받아서 해당 경로에 두세요."
+            f"RETFound weights not found: {weights_path}\n"
+            "See RETFound_DOWNLOAD.md to obtain them and place them at that path."
         )
 
     ckpt = torch.load(weights_path, map_location="cpu", weights_only=False)
@@ -77,7 +77,7 @@ def load_retfound_encoder(weights_path: Path | None = None,
         print(f"[RETFound] matched {len(cleaned) - len(unexpected)} tensors, "
               f"missing={len(missing)}, unexpected={len(unexpected)}")
         if unexpected:
-            print(f"[RETFound] unexpected(앞5): {unexpected[:5]}")
+            print(f"[RETFound] unexpected (first 5): {unexpected[:5]}")
     return encoder
 
 

@@ -19,8 +19,8 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import CFG
-from utils import (gamma_slice_path, qc_ok as _qc_ok, build_cond as _build_cond,
-                  flatten_shift, warp_flatten)
+from bscan_gen.utils import (gamma_slice_path, qc_ok as _qc_ok, build_cond as _build_cond,
+                             flatten_shift, warp_flatten, pick_per_volume)
 
 GMM = CFG.paths.gamma_grading
 PSE = CFG.paths.oct_pseudo / "lines"
@@ -152,10 +152,15 @@ def train():
     OUT.mkdir(parents=True, exist_ok=True)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
 
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
     files = [f for f in sorted(PSE.glob("*.npz")) if qc_ok(np.load(f))]
+    files = pick_per_volume(files, CFG.oct_tier1.diff_slices_per_vol)
     random.seed(0)
     random.shuffle(files)
-    print(f"학습쌍 {len(files)}개")
+    print(f"{len(files)} training pairs")
 
     dl = torch.utils.data.DataLoader(
         DS(files), batch_size=bs, shuffle=True, num_workers=6,
@@ -166,10 +171,12 @@ def train():
     b, a, ac = make_sched(dev)
     scaler = torch.cuda.amp.GradScaler()
 
+    nb = len(dl)
+    log_every = max(1, nb // 10)
     for ep in range(1, epochs + 1):
         m.train()
         tot = 0
-        for img, cond in dl:
+        for bi, (img, cond) in enumerate(dl, 1):
             img, cond = img.to(dev), cond.to(dev)
             t = torch.randint(0, T, (img.size(0),), device=dev)
             noise = torch.randn_like(img)
@@ -181,11 +188,16 @@ def train():
                 pred = m(xt, cond, t)
                 loss = F.mse_loss(pred, noise)
             scaler.scale(loss).backward()
+            scaler.unscale_(opt)
+            torch.nn.utils.clip_grad_norm_(m.parameters(), 1.0)
             scaler.step(opt)
             scaler.update()
             tot += loss.item()
 
-        print(f"ep{ep:3d} loss={tot / len(dl):.4f}")
+            if bi % log_every == 0 or bi == nb:
+                print(f"  ep{ep:3d} [{bi:4d}/{nb}] loss={tot / bi:.4f}", flush=True)
+
+        print(f"ep{ep:3d} done  loss={tot / len(dl):.4f}", flush=True)
         if ep % 5 == 0 or ep == epochs:
             torch.save({"model": m.state_dict()}, CKPT)
             sample(n=6, ep=ep, m=m, files=files)
@@ -242,7 +254,7 @@ def sample(n=None, ep="final", m=None, files=None):
     plt.tight_layout()
     plt.savefig(OUT / f"sample_ep{ep}.png", dpi=90)
     plt.close()
-    print(f"  샘플 저장 → sample_ep{ep}.png")
+    print(f"  sample saved -> sample_ep{ep}.png")
 
 
 if __name__ == "__main__":

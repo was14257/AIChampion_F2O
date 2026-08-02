@@ -11,7 +11,7 @@ from PIL import Image
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-import diffusion_bscan as D
+from bscan_gen import diffusion_bscan as D
 
 warnings.filterwarnings("ignore")
 
@@ -25,7 +25,7 @@ OUTG.mkdir(parents=True, exist_ok=True)
 
 
 @torch.no_grad()
-def ddim_sample(m, conds, steps=100):
+def ddim_sample(m, conds, steps=250):
     dev = conds.device
     b, a, ac = D.make_sched(dev)
     n = conds.size(0)
@@ -56,7 +56,7 @@ def main():
         f for f in sorted(LINES.glob("*.npz"))
         if not (np.isnan(np.load(f)["ilm"]).any() or np.isnan(np.load(f)["rpe"]).any())
     ]
-    print(f"손라벨 {len(files)}개 생성...")
+    print(f"Generating {len(files)} hand-labeled cases...")
     ids = [f.stem for f in files]
 
     def cond_of(f):
@@ -79,7 +79,7 @@ def main():
 
     for cid, g in zip(ids, gens):
         Image.fromarray(g.astype(np.uint8)).save(OUTG / f"{cid}_gen.png")
-    print(f"생성 저장 → {OUTG}")
+    print(f"generation saved -> {OUTG}")
 
     random.seed(0)
     pick = random.sample(range(len(ids)), 12)
@@ -100,7 +100,7 @@ def main():
     plt.tight_layout()
     plt.savefig(D.OUT / "handlabel_compare.png", dpi=95)
     plt.close()
-    print(f"비교 그리드 → {D.OUT / 'handlabel_compare.png'}")
+    print(f"comparison grid -> {D.OUT / 'handlabel_compare.png'}")
 
 
 if __name__ == "__main__":

@@ -149,7 +149,7 @@ def train():
         if ve < best:
             best = ve
             torch.save({"model": m.state_dict(), "val_mae": best}, CKPT)
-    print(f"완료. best val MAE={best:.2f}px → {CKPT}")
+    print(f"done. best val MAE={best:.2f}px -> {CKPT}")
 
 
 @torch.no_grad()
@@ -208,7 +208,7 @@ def predict():
                 plt.savefig(outdir / "overlays" / f"{key}.png", dpi=80, bbox_inches="tight")
                 plt.close()
             n += 1
-    print(f"pseudo-label {n}개 → {outdir}/lines  (오버레이 샘플 → overlays)")
+    print(f"{n} pseudo-labels -> {outdir}/lines  (overlay samples -> overlays)")
 
 
 if __name__ == "__main__":

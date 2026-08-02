@@ -11,7 +11,7 @@ warnings.filterwarnings("ignore")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import CFG
-from utils import load_retfound_encoder, embed_fundus
+from bscan_gen.utils import load_retfound_encoder, embed_fundus
 from local_config import GATE_CHECK_IMAGE
 
 OUTF = CFG.paths.oct_features
@@ -44,14 +44,14 @@ def build(n_pca=30, pct=99):
         GATE, mean_=sc.mean_, scale_=sc.scale_, comps=pca.components_,
         pca_mean=pca.mean_, mu=mu, icov=icov, thr=thr,
     )
-    print(f"게이트 저장 → {GATE}\n  in-dist 거리 중앙{np.median(d):.1f} p{pct}=thr={thr:.1f}")
+    print(f"gate saved -> {GATE}\n  in-dist distance median={np.median(d):.1f} p{pct}=thr={thr:.1f}")
 
 
 class Gate:
 
     def __init__(self):
         if not GATE.exists():
-            raise FileNotFoundError("먼저 `python ood_gate.py build`")
+            raise FileNotFoundError("Run `python ood_gate.py build` first")
         self.z = np.load(GATE)
         self.thr = float(self.z["thr"])
 
@@ -72,5 +72,5 @@ if __name__ == "__main__":
     else:
         g = Gate()
         ok, d = g.check_image(Image.open(GATE_CHECK_IMAGE))
-        verdict = "✓ fundus 통과" if ok else "✗ REJECT (non-fundus)"
-        print(f"거리={d:.1f}  thr={g.thr:.1f}  →  {verdict}")
+        verdict = "OK fundus passed" if ok else "REJECT (non-fundus)"
+        print(f"distance={d:.1f}  thr={g.thr:.1f}  ->  {verdict}")

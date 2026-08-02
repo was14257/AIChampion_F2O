@@ -114,7 +114,7 @@ def main():
         cid = npz.stem
         d = np.load(npz)
         if np.isnan(d["ilm"]).all() or np.isnan(d["rpe"]).all():
-            print(f"  {cid}: 라벨 비어있음 skip")
+            print(f"  {cid}: empty label, skip")
             continue
         f = case_features(d["ilm"], d["rpe"], lat.get(cid, "OD"))
         f["case_id"] = cid
@@ -124,14 +124,14 @@ def main():
 
     df = pd.DataFrame(rows).set_index("case_id")
     df.to_csv(OUT / "features.csv", encoding="utf-8-sig")
-    print(f"\n{len(df)}개 case feature 추출 → {OUT/'features.csv'}")
-    print("녹내장 분포:", df["glaucoma"].value_counts().to_dict())
+    print(f"\n{len(df)} case features extracted -> {OUT/'features.csv'}")
+    print("Glaucoma distribution:", df["glaucoma"].value_counts().to_dict())
 
     feats = [c for c in df.columns if c not in ("laterality", "glaucoma")]
     sub = df.dropna(subset=["glaucoma"])
     y = sub["glaucoma"].astype(int).values
-    lines_out = [f"n={len(sub)}  녹내장={int(y.sum())} 정상={int((y==0).sum())}",
-                 f"{'feature':<14}{'정상':>8}{'녹내장':>9}{'AUC':>7}{'r':>7}{'p':>9}"]
+    lines_out = [f"n={len(sub)}  glaucoma={int(y.sum())} normal={int((y==0).sum())}",
+                 f"{'feature':<14}{'normal':>8}{'glaucoma':>9}{'AUC':>7}{'r':>7}{'p':>9}"]
     scored = []
     for ft in feats:
         v = sub[ft].values.astype(float)
@@ -156,11 +156,11 @@ def main():
     fig, axes = plt.subplots(1, 4, figsize=(14, 4))
     for ax, ft in zip(axes, top):
         ax.boxplot([sub[sub.glaucoma == 0][ft], sub[sub.glaucoma == 1][ft]],
-                   labels=["정상", "녹내장"])
+                   labels=["normal", "glaucoma"])
         ax.set_title(ft)
     plt.tight_layout()
     plt.savefig(OUT / "feature_box.png", dpi=100)
-    print(f"\n박스플롯 → {OUT/'feature_box.png'}")
+    print(f"\nBoxplot -> {OUT/'feature_box.png'}")
 
 
 if __name__ == "__main__":

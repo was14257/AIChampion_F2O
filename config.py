@@ -162,6 +162,7 @@ class OctTier1Config:
     diff_epochs: int = _lc.DIFF_EPOCHS
     diff_bs: int = _lc.DIFF_BS
     diff_sample_n: int = _lc.DIFF_SAMPLE_N
+    diff_slices_per_vol: int = _lc.DIFF_SLICES_PER_VOL
 
     diff_full_root: Path = _lc.DIFF_FULL_ROOT
     diff_full_pseudo: Path = _lc.DIFF_FULL_PSEUDO
@@ -200,9 +201,9 @@ if __name__ == "__main__":
     print("data_root        :", CFG.paths.data_root)
     print("output_root      :", CFG.paths.output_root)
     print("REFUGE train img :", CFG.paths.refuge_train_img,
-          "(존재:", CFG.paths.refuge_train_img.exists(), ")")
+          "(exists:", CFG.paths.refuge_train_img.exists(), ")")
     print("RETFound weights :", CFG.paths.retfound_weights,
-          "(존재:", CFG.paths.retfound_weights.exists(), ")")
+          "(exists:", CFG.paths.retfound_weights.exists(), ")")
     print("checkpoint dir   :", CFG.paths.ckpt_dir)
     print()
     print("datasets:", json.dumps({

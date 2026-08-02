@@ -19,7 +19,7 @@ def _pair_files(img_dir: Path, mask_dir: Path) -> list[tuple[Path, Path]]:
             pairs.append((img_path, mask_path))
     if not pairs:
         raise FileNotFoundError(
-            f"이미지/마스크 쌍을 찾지 못함: {img_dir} <-> {mask_dir}"
+            f"No image/mask pairs found: {img_dir} <-> {mask_dir}"
         )
     return pairs
 
@@ -50,7 +50,7 @@ class RefugeSegDataset(Dataset):
                 "test":  (p.refuge_test_img,  p.refuge_test_mask),
             }
             if split not in dirs:
-                raise ValueError(f"split 은 train/val/test 중 하나여야 함: {split}")
+                raise ValueError(f"split must be one of train/val/test: {split}")
             img_dir, mask_dir = dirs[split]
             self.pairs = _pair_files(img_dir, mask_dir)
 
