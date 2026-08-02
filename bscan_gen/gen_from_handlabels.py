@@ -24,33 +24,17 @@ OUTG = D.OUT / "handlabel_gen"
 OUTG.mkdir(parents=True, exist_ok=True)
 
 
-@torch.no_grad()
-def ddim_sample(m, conds, steps=250):
-    dev = conds.device
-    b, a, ac = D.make_sched(dev)
-    n = conds.size(0)
-    x = torch.randn(n, 1, D.H, D.W, device=dev)
-    ts = np.linspace(0, D.T - 1, steps).astype(int)[::-1]
-
-    for k, i in enumerate(ts):
-        t = torch.full((n,), int(i), device=dev, dtype=torch.long)
-        with torch.autocast("cuda"):
-            eps = m(x, conds, t)
-        aci = ac[i]
-        x0 = ((x - (1 - aci).sqrt() * eps) / aci.sqrt()).clamp(-1, 1)
-        if k < len(ts) - 1:
-            ai = ac[int(ts[k + 1])]
-            x = ai.sqrt() * x0 + (1 - ai).sqrt() * eps
-        else:
-            x = x0
-    return x
+def ddim_sample(m, conds, steps=250, spec=None):
+    """Kept as a thin wrapper so existing callers keep working. The sampling
+    itself now lives in diffusion_bscan.ddim_sample; pass spec explicitly
+    rather than relying on module globals being patched from outside."""
+    return D.ddim_sample(m, conds, spec or D.default_spec(), steps=steps)
 
 
-def main():
+def main(spec=None):
+    spec = spec or D.default_spec()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    m = D.UNet().to(dev)
-    m.load_state_dict(torch.load(D.CKPT, map_location=dev, weights_only=False)["model"])
-    m.eval()
+    m = D.load_unet(spec, dev)
 
     files = [
         f for f in sorted(LINES.glob("*.npz"))
@@ -62,17 +46,17 @@ def main():
     def cond_of(f):
         d = np.load(f)
         ilm, rpe = d["ilm"], d["rpe"]
-        if D.FLATTEN:
+        if spec.flatten:
             shift = D.flatten_shift(rpe)
             ilm, rpe = ilm - shift, rpe - shift
-        return D.build_cond(ilm, rpe)
+        return D.build_cond_for(ilm, rpe, spec)
 
     conds = torch.stack([torch.from_numpy(cond_of(f))[None] for f in files])
 
     gens = []
     for s in range(0, len(files), 16):
         c = conds[s:s + 16].to(dev)
-        g = ddim_sample(m, c, steps=100)
+        g = ddim_sample(m, c, steps=100, spec=spec)
         gens.append(((g.clamp(-1, 1) + 1) * 127.5).cpu().numpy()[:, 0])
         print(f"  {min(s + 16, len(files))}/{len(files)}")
     gens = np.concatenate(gens)
@@ -86,7 +70,7 @@ def main():
     fig, ax = plt.subplots(3, 12, figsize=(24, 6.5))
     for j, idx in enumerate(pick):
         cid = ids[idx]
-        real = np.asarray(Image.open(BSC / f"{cid}.png").convert("L").resize((D.W, D.H)))
+        real = np.asarray(Image.open(BSC / f"{cid}.png").convert("L").resize((spec.w, spec.h)))
         ax[0, j].imshow(conds[idx, 0], cmap="viridis", aspect="auto")
         ax[0, j].axis("off")
         ax[0, j].set_title(cid, fontsize=8)

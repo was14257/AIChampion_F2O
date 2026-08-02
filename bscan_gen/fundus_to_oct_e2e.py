@@ -35,15 +35,13 @@ warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from bscan_gen import diffusion_bscan as D
-
-D.H = 512
-D.W = 512
-D.CKPT = D.OUT / "ddpm512_flat.pth"
-assert D.CKPT.exists(), f"checkpoint not found: {D.CKPT}"
-
-from bscan_gen.gen_from_handlabels import ddim_sample
 from bscan_gen.utils import gamma_fundus_path
 from config import CFG
+
+# 512 model, stated explicitly instead of patching D.H/D.W/D.CKPT at import
+# time - that used to leak into every other module that imported D.
+SPEC = D.spec_512()
+assert SPEC.ckpt.exists(), f"checkpoint not found: {SPEC.ckpt}"
 
 LINES = CFG.paths.oct_labels / "lines"
 BSC = CFG.paths.oct_labels / "bscans"
@@ -116,11 +114,9 @@ def main():
 
     print(f"Stage B: diffusion generation (generate {N_SAMPLES} per case, pick the one with least speckle, same logic as app_streamlit.py)")
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    net = D.UNet().to(dev)
-    net.load_state_dict(torch.load(D.CKPT, map_location=dev, weights_only=False)["model"])
-    net.eval()
+    net = D.load_unet(SPEC, dev)
     conds = torch.stack([
-        torch.from_numpy(D.build_cond(ILM_g[i], RPE_g[i]))[None]
+        torch.from_numpy(D.build_cond_for(ILM_g[i], RPE_g[i], SPEC))[None]
         for i in range(len(ids))
     ])
 
@@ -129,7 +125,7 @@ def main():
         cond_i = conds[i:i + 1].to(dev)
         candidates = []
         for _ in range(N_SAMPLES):
-            g = ddim_sample(net, cond_i, steps=100)
+            g = D.ddim_sample(net, cond_i, SPEC, steps=100)
             im = ((g.clamp(-1, 1) + 1) * 127.5).cpu().numpy()[0, 0].astype(np.uint8)
             candidates.append(im)
         best = min(candidates, key=speckle_score)
@@ -147,7 +143,7 @@ def main():
     for j, idx in enumerate(pick):
         c = ids[idx]
         fund = np.asarray(Image.open(fundus_path(c)).convert("RGB").resize((256, 256)))
-        real = np.asarray(Image.open(BSC / f"{c}.png").convert("L").resize((D.W, D.H)))
+        real = np.asarray(Image.open(BSC / f"{c}.png").convert("L").resize((SPEC.w, SPEC.h)))
         ax[0, j].imshow(fund)
         ax[0, j].axis("off")
         ax[0, j].set_title(c, fontsize=8)

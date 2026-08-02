@@ -30,7 +30,7 @@ warnings.filterwarnings("ignore")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config import CFG
-from bscan_gen.utils import load_retfound_encoder, embed_fundus, build_cond
+from bscan_gen.utils import load_retfound_encoder, embed_fundus
 from bscan_gen import diffusion_bscan as D
 from bscan_gen.ood_gate import Gate as OODGate
 from glaucoma_cls.eyeon_cbm import EyeonCBM
@@ -50,42 +50,12 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 GLAUCOMA_CKPT = CFG.paths.output_root / "glaucoma_cls" / "best.pth"
 SEG_CKPT = CFG.paths.ckpt_dir / "best.pth"
 OCT_LINEAR_CKPT = CFG.paths.oct_features / "oct_linear.pt"
-DIFF_CKPT = CFG.paths.diffusion_out / "ddpm512_flat.pth"  # 12절 기록: 512가 256보다 우수
-DIFF_H = DIFF_W = 512
-DIFF_HORIG = CFG.oct_tier1.horig
+# Stage B diffusion: the 512 model (512 reproduces structure better than 256).
+# Carrying resolution+checkpoint as one spec means we no longer patch
+# diffusion_bscan's globals or keep a duplicate sampler here.
+DIFF_SPEC = D.spec_512()
 
 _models = {}
-
-
-@torch.no_grad()
-def ddim_sample_512(unet, conds, steps=100, progress_cb=None):
-    """bscan_gen/gen_from_handlabels.ddim_sample과 동일한 결정론적(eta=0) DDIM
-    이지만, 그 함수는 전역 diffusion_bscan.H/W(현재 256)로 노이즈를 만들어
-    512 체크포인트(ddpm512_flat.pth)와 크기가 안 맞는다. H/W를 인자로 받도록
-    복제(CLAUDE.md 12절: steps는 100 수준이 이 모델엔 더 안정적, 250은 오히려
-    speckle 심해짐).
-    progress_cb(k, steps): 각 denoising step마다 호출 - UI에 실제 진행률을
-    보여주기 위함(사용자 요청: diffusion이 실제로 스텝을 도는 걸 눈으로 확인)."""
-    dev = conds.device
-    b, a, ac = D.make_sched(dev)
-    n = conds.size(0)
-    x = torch.randn(n, 1, DIFF_H, DIFF_W, device=dev)
-    ts = np.linspace(0, D.T - 1, steps).astype(int)[::-1]
-
-    for k, i in enumerate(ts):
-        t = torch.full((n,), int(i), device=dev, dtype=torch.long)
-        with torch.autocast("cuda", enabled=dev.type == "cuda"):
-            eps = unet(x, conds, t)
-        aci = ac[i]
-        x0 = ((x - (1 - aci).sqrt() * eps) / aci.sqrt()).clamp(-1, 1)
-        if k < len(ts) - 1:
-            ai = ac[int(ts[k + 1])]
-            x = ai.sqrt() * x0 + (1 - ai).sqrt() * eps
-        else:
-            x = x0
-        if progress_cb is not None:
-            progress_cb(k + 1, steps)
-    return x
 
 
 def _load_all():
@@ -131,10 +101,7 @@ def _load_all():
     _models["stageA"] = _fit_stage_a()
 
     # --- Stage B: diffusion UNet ---
-    unet = D.UNet().to(DEVICE)
-    unet.load_state_dict(torch.load(DIFF_CKPT, map_location=DEVICE, weights_only=False)["model"])
-    unet.eval()
-    _models["unet"] = unet
+    _models["unet"] = D.load_unet(DIFF_SPEC, DEVICE)
 
     print("모델 로딩 완료")
     return _models
@@ -475,7 +442,7 @@ def run_analysis(img: Image.Image, progress_bar, eye_side: str = "auto"):
     if eye_side == "OS":
         ilm, rpe = ilm[::-1].copy(), rpe[::-1].copy()
 
-    cond = build_cond(ilm, rpe, H=DIFF_H, W=DIFF_W, horig=DIFF_HORIG)
+    cond = D.build_cond_for(ilm, rpe, DIFF_SPEC)
     cond_t = torch.from_numpy(cond)[None, None].to(DEVICE)
 
     # DDIM(eta=0)은 결정론적이지만 시작 노이즈가 매번 랜덤이라 speckle 패턴이
@@ -492,7 +459,8 @@ def run_analysis(img: Image.Image, progress_bar, eye_side: str = "auto"):
 
     candidates = []
     for i in range(N_SAMPLES):
-        gen = ddim_sample_512(m["unet"], cond_t, steps=100, progress_cb=_diff_progress(i))
+        gen = D.ddim_sample(m["unet"], cond_t, DIFF_SPEC, steps=100,
+                            progress_cb=_diff_progress(i))
         img_i = ((gen.clamp(-1, 1) + 1) * 127.5).cpu().numpy()[0, 0].astype(np.uint8)
         candidates.append(img_i)
 

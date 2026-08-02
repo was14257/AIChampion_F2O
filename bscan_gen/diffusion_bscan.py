@@ -2,6 +2,7 @@ import math
 import random
 import sys
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib
@@ -33,6 +34,33 @@ HORIG = CFG.oct_tier1.horig
 T = CFG.oct_tier1.diff_t
 FLATTEN = CFG.oct_tier1.flatten_rpe
 CKPT = OUT / f"ddpm{H}{'_flat' if FLATTEN else ''}.pth"
+
+
+@dataclass(frozen=True)
+class DiffusionSpec:
+    """Resolution a diffusion checkpoint was trained at, paired with its weights.
+
+    Callers used to select the 512 model by overwriting this module's global
+    H/W/CKPT at runtime (fundus_to_oct_e2e.py). That made the same function
+    behave differently depending on which script imported it first: running
+    gen_from_handlabels.py directly gave 256, reaching it through the e2e
+    script gave 512. Passing the resolution in removes that hidden coupling."""
+    h: int
+    w: int
+    ckpt: Path
+    horig: int = HORIG
+    t: int = T
+    flatten: bool = FLATTEN
+
+
+def default_spec() -> DiffusionSpec:
+    """Resolution/checkpoint the config points at (currently 256)."""
+    return DiffusionSpec(h=H, w=W, ckpt=CKPT)
+
+
+def spec_512() -> DiffusionSpec:
+    """The 512 model used by the deployed demo and e2e generation."""
+    return DiffusionSpec(h=512, w=512, ckpt=OUT / "ddpm512_flat.pth")
 
 
 def load_pair(cid, si, ilm, rpe):
@@ -139,11 +167,59 @@ class UNet(nn.Module):
         return self.out(u)
 
 
-def make_sched(dev):
-    b = torch.linspace(1e-4, 0.02, T, device=dev)
+def make_sched(dev, t_steps=None):
+    b = torch.linspace(1e-4, 0.02, t_steps or T, device=dev)
     a = 1 - b
     ac = torch.cumprod(a, 0)
     return b, a, ac
+
+
+@torch.no_grad()
+def ddim_sample(m, conds, spec, steps=100, progress_cb=None):
+    """Deterministic (eta=0) DDIM sampling at the resolution given by spec.
+
+    This logic previously existed twice: gen_from_handlabels.ddim_sample read
+    the module globals (so it built noise at 256 and mismatched the 512
+    checkpoint), and app_streamlit.py kept its own 512 copy. The copy had two
+    improvements the original lacked - autocast disabled on CPU, and a
+    progress callback - both folded in here.
+
+    progress_cb(k, steps): called per denoising step, for UI progress.
+    """
+    dev = conds.device
+    b, a, ac = make_sched(dev, spec.t)
+    n = conds.size(0)
+    x = torch.randn(n, 1, spec.h, spec.w, device=dev)
+    ts = np.linspace(0, spec.t - 1, steps).astype(int)[::-1]
+
+    for k, i in enumerate(ts):
+        t = torch.full((n,), int(i), device=dev, dtype=torch.long)
+        with torch.autocast("cuda", enabled=dev.type == "cuda"):
+            eps = m(x, conds, t)
+        aci = ac[i]
+        x0 = ((x - (1 - aci).sqrt() * eps) / aci.sqrt()).clamp(-1, 1)
+        if k < len(ts) - 1:
+            ai = ac[int(ts[k + 1])]
+            x = ai.sqrt() * x0 + (1 - ai).sqrt() * eps
+        else:
+            x = x0
+        if progress_cb is not None:
+            progress_cb(k + 1, steps)
+    return x
+
+
+def load_unet(spec, dev):
+    """Load the UNet from spec's checkpoint (the net itself is conv-only, so
+    it is resolution-agnostic - only the sampling noise shape depends on spec)."""
+    m = UNet().to(dev)
+    m.load_state_dict(torch.load(spec.ckpt, map_location=dev, weights_only=False)["model"])
+    m.eval()
+    return m
+
+
+def build_cond_for(ilm, rpe, spec):
+    """Condition sketch rendered at spec's resolution."""
+    return _build_cond(ilm, rpe, spec.h, spec.w, spec.horig)
 
 
 def train():
