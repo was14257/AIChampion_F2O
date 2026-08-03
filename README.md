@@ -23,7 +23,7 @@ concept 기반 설명가능성(concept_saliency 등)을 한 화면에서 보여�
 - [`local_config.py`](local_config.py) — 경로, 하이퍼파라미터, 실행 모드 등 **실제 값**
 - [`config.py`](config.py) — `local_config` 값을 구조화한 `CFG` 제공 (`from config import CFG`)
 
-경로는 로컬(Windows)/서버(`/home/tta`)를 자동 감지한다. GAMMA만 로컬에서 `D:/GAMMA` 별도.
+경로는 로컬(Windows)/서버(`/home/tta`)를 자동 감지한다.
 
 ---
 
