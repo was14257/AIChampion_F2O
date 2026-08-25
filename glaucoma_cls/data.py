@@ -226,6 +226,10 @@ _CBM_CONCEPTS_NPZ = DATA.parent / "outputs/oct_features/cbm_concepts.npz"
 _CBM_CONCEPTS_NPZ = (_CBM_CONCEPTS_NPZ if _CBM_CONCEPTS_NPZ.exists()
                      else Path("/home/tta/outputs/oct_features/cbm_concepts.npz"))
 
+_CBM_CONCEPTS_V2_NPZ = DATA.parent / "outputs/oct_features/cbm_concepts_v2.npz"
+_CBM_CONCEPTS_V2_NPZ = (_CBM_CONCEPTS_V2_NPZ if _CBM_CONCEPTS_V2_NPZ.exists()
+                        else Path("/home/tta/outputs/oct_features/cbm_concepts_v2.npz"))
+
 
 def load_concept_table():
     """Returns cbm_concepts.npz (9 concept types for REFUGE+G1020+ORIGA+GAMMA)
@@ -240,6 +244,46 @@ def load_concept_table():
     paths = d["paths"].tolist()
     X = d["X"].astype("float32")
     return {Path(p).name: X[i] for i, p in enumerate(paths)}, X.shape[1]
+
+
+def load_concept_table_v2():
+    """v2: cbm_concepts_v2.npz (11 concepts: SEG 6 + GRAPE-trained RNFL 5,
+    for GAMMA_train+REFUGE+GRAPE, n=758). See feature_extraction/extract_concepts_v2.py."""
+    d = np.load(_CBM_CONCEPTS_V2_NPZ, allow_pickle=True)
+    paths = d["paths"].tolist()
+    X = d["X"].astype("float32")
+    return {Path(p).name: X[i] for i, p in enumerate(paths)}, X.shape[1]
+
+
+def grape_baseline_rows():
+    """GRAPE Baseline sheet(환자당 최초 방문 1장, 전원 glaucoma). 5-concept
+    RNFL 학습(fit_rnfl_pls.py)과 v2 classifier pool 양쪽에서 재사용."""
+    import local_config as _lc
+    root = _lc.GRAPE_ROOT
+    df = pd.read_excel(root / "VF and clinical information.xlsx",
+                       sheet_name="Baseline", header=None, skiprows=2)
+    out = []
+    for fn in df[16]:
+        if pd.isna(fn):
+            continue
+        p = root / "CFPs" / str(fn).strip()
+        if p.exists():
+            out.append((str(p), 1, "GRAPE"))
+    return out
+
+
+def build_pool_v2(seed=42):
+    """v2 classifier용 통합 pool: GAMMA_train(100) + REFUGE train(400) +
+    GRAPE baseline(263) 전체를 하나의 DataFrame으로 묶는다(leakage 방지를
+    위해 GAMMA_train만 val로 쓰던 build_frames()와 달리, val도 이 pool
+    전체에서 stratified로 뽑는 방식 - 2026-08-09 사용자 요청). glaucoma_ratio
+    유지를 위해 실제 split은 StratifiedKFold(pool, pool["label"])로 호출부에서 수행."""
+    gamma = pd.DataFrame(_gamma_train(), columns=["path", "label", "dataset", "case_id"])
+    gamma = gamma[["path", "label", "dataset"]]
+    refuge = pd.DataFrame(_refuge(), columns=["path", "label", "dataset"])
+    grape = pd.DataFrame(grape_baseline_rows(), columns=["path", "label", "dataset"])
+    pool = pd.concat([gamma, refuge, grape], ignore_index=True)
+    return pool.sample(frac=1, random_state=seed).reset_index(drop=True)
 
 
 def _concept_vecs(df, concept_table, n_concepts, key_col="path", key_fn=None):

@@ -67,20 +67,24 @@ def mc_dropout_ci(model, x: torch.Tensor, concepts: torch.Tensor,
     }
 
 
-def concept_saliency(model, x: torch.Tensor, concepts: torch.Tensor) -> dict:
+def concept_saliency(model, x: torch.Tensor, concepts: torch.Tensor,
+                     concept_names: list[str] | None = None) -> dict:
     """Each concept's contribution to risk in this case (gradient*input saliency).
 
-    x: (1,3,224,224) fundus tensor, concepts: (1, 9) standardized concept vector.
+    x: (1,3,224,224) fundus tensor, concepts: (1, n_concepts) standardized
+    concept vector. concept_names defaults to ALL_CONCEPTS(9) for backward
+    compatibility; pass ALL_CONCEPTS_V2(11) when using the RNFL-based model.
     Returns: {concept name: contribution float} (positive=risk direction,
     negative=protective direction).
     """
     model.eval()
+    names = concept_names if concept_names is not None else ALL_CONCEPTS
     c = concepts.clone().detach().requires_grad_(True)
     model.zero_grad()
     logit = model(x, c)          # risk logit (including the concept_proj pass)
     logit.sum().backward()
-    contrib = (c.grad * c).detach().cpu().numpy()[0]   # (9,)
-    return dict(zip(ALL_CONCEPTS, contrib.tolist()))
+    contrib = (c.grad * c).detach().cpu().numpy()[0]   # (n_concepts,)
+    return dict(zip(names, contrib.tolist()))
 
 
 class ViTGradCAM:

@@ -34,22 +34,23 @@ from bscan_gen.utils import load_retfound_encoder, embed_fundus
 from bscan_gen import diffusion_bscan as D
 from bscan_gen.ood_gate import Gate as OODGate
 from glaucoma_cls.eyeon_cbm import EyeonCBM
-from glaucoma_cls.concepts import ALL_CONCEPTS, OCT_CONCEPTS, CONCEPT_META
+from glaucoma_cls.concepts import ALL_CONCEPTS_V2, CONCEPT_META
 from retfound_seg.model import build_model as build_seg_model
 from glaucoma_cls.model import GlaucomaNet
-from glaucoma_cls.data import (load_concept_table, build_frames, _letterbox_square,
-                               _MEAN as _CLS_MEAN, _STD as _CLS_STD)
+from glaucoma_cls.data import _letterbox_square, _MEAN as _CLS_MEAN, _STD as _CLS_STD
 import local_config as _lc
-from local_config import (CLS_UNFREEZE_LAST_N, CLS_CONCEPT_PROJ_DIM,
-                          CLS_POS_WEIGHT_SCALE)
+from local_config import CLS_UNFREEZE_LAST_N, CLS_CONCEPT_PROJ_DIM
 from glaucoma_cls.explain import concept_saliency, attention_rollout, overlay_heatmap, mc_dropout_ci
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-# train.py가 저장하는 위치(OUTPUT_ROOT/glaucoma_cls/best.pth)와 같은 곳을 가리킨다.
-# 예전엔 로컬 절대경로가 박혀 있어 서버에서 그대로 실행되지 않았다.
-GLAUCOMA_CKPT = CFG.paths.output_root / "glaucoma_cls" / "best.pth"
+# v2 (2026-08-09): concept을 9개(SEG6+OCT_CONCEPTS3, GAMMA 172장 학습)에서
+# 11개(SEG6+RNFL5, GRAPE 244장 실측 학습)로 교체. GAMMA+REFUGE+GRAPE 전체를
+# 하나의 pool로 묶어 stratified 5-fold로 재학습(temp/cv_v2_11concept.py) -
+# spec이 0.85~0.90으로 안정적이고 AUC 0.963으로 기존 no_grape 기준(0.975)에 근접.
+GLAUCOMA_CKPT = CFG.paths.output_root / "glaucoma_cls" / "glaucoma_v2_11concept_bestfold.pth"
 SEG_CKPT = CFG.paths.ckpt_dir / "best.pth"
-OCT_LINEAR_CKPT = CFG.paths.oct_features / "oct_linear.pt"
+CONCEPT_NPZ_V2 = CFG.paths.oct_features / "cbm_concepts_v2.npz"
+RNFL_PLS_CKPT = CFG.paths.oct_features / "grape_rnfl_pls.pkl"
 # Stage B diffusion: the 512 model (512 reproduces structure better than 256).
 # Carrying resolution+checkpoint as one spec means we no longer patch
 # diffusion_bscan's globals or keep a duplicate sampler here.
@@ -78,15 +79,15 @@ def _load_all():
     oct_enc = load_retfound_encoder()
     oct_enc.eval().to(DEVICE)
 
-    oct_ck = torch.load(OCT_LINEAR_CKPT, map_location="cpu", weights_only=False)
-    oct_linear = nn.Linear(oct_ck["in_dim"], len(OCT_CONCEPTS))
-    oct_linear.load_state_dict(oct_ck["state_dict"])
-    oct_linear.eval().to(DEVICE)
+    import pickle
+    with open(RNFL_PLS_CKPT, "rb") as f:
+        rnfl_model = pickle.load(f)
 
-    _models["cbm"] = EyeonCBM(seg_model, oct_enc, oct_linear).to(DEVICE)
+    _models["cbm"] = EyeonCBM(seg_model, oct_enc, oct_linear=None,
+                              rnfl_model=rnfl_model).to(DEVICE)
 
-    # --- glaucoma risk 분류기 (concept 9개 결합, best 구성) ---
-    concept_table, n_concepts = load_concept_table()
+    # --- glaucoma risk 분류기 (concept 11개 결합, v2) ---
+    concept_table, n_concepts = _load_concept_table_v2()
     clf = GlaucomaNet(freeze_encoder=True, unfreeze_last_n=CLS_UNFREEZE_LAST_N,
                       n_concepts=n_concepts, concept_proj_dim=CLS_CONCEPT_PROJ_DIM).to(DEVICE)
     ck = torch.load(GLAUCOMA_CKPT, map_location=DEVICE, weights_only=False)
@@ -94,7 +95,7 @@ def _load_all():
     clf.eval()
     _models["clf"] = clf
     _models["concept_table"] = concept_table
-    _models["concept_stats"] = _fit_concept_norm(concept_table, n_concepts)
+    _models["concept_stats"] = _fit_concept_norm_v2(concept_table, n_concepts)
     _models["n_concepts"] = n_concepts
 
     # --- Stage A: fundus 임베딩 -> 두께 프로파일 PLS (172개 손라벨로 최종 fit) ---
@@ -107,19 +108,21 @@ def _load_all():
     return _models
 
 
-def _fit_concept_norm(concept_table, n_concepts):
-    """glaucoma_cls 학습 때(train.py)와 정확히 동일한 표본으로 concept 정규화
-    mean/std를 재현한다. train.py는 build_frames(use_datasets=("REFUGE",))로
-    REFUGE(400)+GAMMA_train(80)=480장만 ext로 쓰는데, 이전엔 concept_table
-    전체(캐시된 REFUGE+ORIGA+G1020+GAMMA 2127장)로 근사했었다 - concept마다
-    스케일이 크게 달라(예: disc_area가 수천대) 이 표본 차이가 확률 median을
-    0.45~0.56 수준으로 흔들 만큼 커서(2026-07-30, REFUGE val 재평가 중 발견)
-    "근사해도 안정적"이라는 원래 가정이 틀렸음이 확인됐다. 반드시 학습과
-    동일한 480장 표본을 써야 함."""
+def _load_concept_table_v2():
+    """cbm_concepts_v2.npz(11개: SEG6+RNFL5, GAMMA_train+REFUGE+GRAPE
+    n=758)를 파일명 -> concept vector 딕셔너리로 로드."""
     from pathlib import Path
-    ext_all, _, _ = build_frames(use_datasets=("REFUGE",))
-    X = np.stack([concept_table[Path(p).name] for p in ext_all["path"]
-                 if Path(p).name in concept_table])
+    d = np.load(CONCEPT_NPZ_V2, allow_pickle=True)
+    paths = d["paths"].tolist()
+    X = d["X"].astype("float32")
+    return {Path(p).name: X[i] for i, p in enumerate(paths)}, X.shape[1]
+
+
+def _fit_concept_norm_v2(concept_table, n_concepts):
+    """v2 학습(temp/cv_v2_11concept.py)은 GAMMA_train+REFUGE+GRAPE 전체
+    pool(n=758)에 대한 concept 정규화 통계를 그대로 재현한다(fold별로 조금씩
+    다르지만 배포용은 전체 pool 통계로 통일)."""
+    X = np.stack(list(concept_table.values()))
     mean = X.mean(axis=0)
     std = X.std(axis=0)
     std[std == 0] = 1.0
@@ -382,7 +385,7 @@ def run_analysis(img: Image.Image, progress_bar, eye_side: str = "auto"):
     if not ood_ok:
         return {"ood_reject": True, "ood_dist": ood_dist, "ood_thr": m["ood_gate"].thr}
 
-    progress_bar.progress(20, text="시신경 구조 분석 중… (concept 9개 계산)")
+    progress_bar.progress(20, text="시신경 구조 분석 중… (concept 11개 계산)")
     # predict_from_path가 경로를 요구해서 업로드 이미지를 임시 저장한다. 예전엔
     # 고정 파일명이라 동시 요청 시 서로 덮어쓸 수 있었어서 요청마다 고유 파일을
     # 만들고 끝나면 지운다.
@@ -390,7 +393,7 @@ def run_analysis(img: Image.Image, progress_bar, eye_side: str = "auto"):
         tmp_path = Path(tmp_dir) / "input.png"
         img.save(tmp_path)
         cbm_out = m["cbm"].predict_from_path(str(tmp_path), device=DEVICE)
-    concept_vec_raw = np.array([cbm_out[c] for c in ALL_CONCEPTS], dtype=np.float32)
+    concept_vec_raw = np.array([cbm_out[c] for c in ALL_CONCEPTS_V2], dtype=np.float32)
     mean, std = m["concept_stats"]
     concept_vec_norm = (concept_vec_raw - mean) / std
     seg_overlay, disc_x_rel = _disc_cup_overlay(m["cbm"], img)
@@ -423,7 +426,7 @@ def run_analysis(img: Image.Image, progress_bar, eye_side: str = "auto"):
     # concept_saliency는 backward가 필요해 enable_grad, rollout은 no_grad로 충분.
     progress_bar.progress(52, text="판단 근거 분석 중… (concept 기여도 + attention)")
     with torch.enable_grad():
-        saliency = concept_saliency(m["clf"], x, c_in)
+        saliency = concept_saliency(m["clf"], x, c_in, concept_names=ALL_CONCEPTS_V2)
     att_map, _ = attention_rollout(m["clf"], x, c_in)
     gradcam_overlay = np.asarray(overlay_heatmap(img.resize((224, 224)), att_map))
 
@@ -449,20 +452,22 @@ def run_analysis(img: Image.Image, progress_bar, eye_side: str = "auto"):
     # 샘플마다 달라진다(CLAUDE.md 12절). 5장 생성해 가장 매끄러운(speckle 적은)
     # 1장을 자동 선택 - "더 정확한" 선택이 아니라 "더 보기 좋은" 선택이다(구조는
     # 5장 다 동일 조건이라 같음, speckle만 다름).
+    # 5장을 순차 for-loop(각 100 step)로 돌리면 UNet forward를 500번 하게 되어
+    # 느림 - ddim_sample이 배치 차원을 지원하므로 cond를 5개로 repeat해 한 번의
+    # 호출로 배치 샘플링(forward 100번, 배치 크기만 5). GPU 서버(전용 16GB)
+    # 기준 512x512 1채널 conv UNet의 배치 5 activation 메모리는 여유 있게 들어감 -
+    # VRAM이 빠듯한 환경에서 OOM 나면 N_SAMPLES를 줄일 것.
     N_SAMPLES = 5
 
-    def _diff_progress(sample_i):
-        def _cb(k, total):
-            pct = 60 + int(35 * (sample_i + k / total) / N_SAMPLES)
-            progress_bar.progress(min(pct, 95), text="합성 OCT 생성 중…")
-        return _cb
+    def _diff_progress(k, total):
+        pct = 60 + int(35 * k / total)
+        progress_bar.progress(min(pct, 95), text="합성 OCT 생성 중…")
 
-    candidates = []
-    for i in range(N_SAMPLES):
-        gen = D.ddim_sample(m["unet"], cond_t, DIFF_SPEC, steps=100,
-                            progress_cb=_diff_progress(i))
-        img_i = ((gen.clamp(-1, 1) + 1) * 127.5).cpu().numpy()[0, 0].astype(np.uint8)
-        candidates.append(img_i)
+    cond_batch = cond_t.repeat(N_SAMPLES, 1, 1, 1)
+    gen = D.ddim_sample(m["unet"], cond_batch, DIFF_SPEC, steps=100,
+                        progress_cb=_diff_progress)
+    gen_imgs = ((gen.clamp(-1, 1) + 1) * 127.5).cpu().numpy()[:, 0].astype(np.uint8)
+    candidates = [gen_imgs[i] for i in range(N_SAMPLES)]
 
     def _speckle_score(im):
         """고주파(speckle) 에너지 - 낮을수록 매끄러움(=보기 좋음)."""
@@ -477,7 +482,7 @@ def run_analysis(img: Image.Image, progress_bar, eye_side: str = "auto"):
     time.sleep(0.2)
     progress_bar.empty()
 
-    concept_dict = dict(zip(ALL_CONCEPTS, concept_vec_raw.tolist()))
+    concept_dict = dict(zip(ALL_CONCEPTS_V2, concept_vec_raw.tolist()))
     return {
         "ood_reject": False,
         "ood_dist": ood_dist,
@@ -583,8 +588,16 @@ def _confidence_from_ci(ci: dict) -> tuple:
 # 판정 threshold (raw risk 기준). 재학습마다 재산출해야 하는 값이라 한 곳에만
 # 두고 화면/PDF가 모두 여기를 참조한다 - 예전엔 report_pdf.py가 옛 값(21%)을
 # 따로 하드코딩하고 있어 리포트에만 폐기된 기준이 찍히는 문제가 있었다.
-THR_SUSPECT = 0.60  # "주의 필요" 진입점 (sens=1.000 유지 마지막 지점)
-THR_HIGH = 0.66     # "높은 위험" 진입점 (Youden's J 최댓값)
+# 2026-08-09: v2(concept 11개=RNFL 추가, GAMMA+REFUGE+GRAPE pool 학습) 기준
+# 재보정. Out-of-fold 확률(각 샘플이 자신이 val일 때 낸 예측만 모음 - leakage
+# 없음, glaucoma_cls/train_v2.py가 저장하는 oof_v2_11concept.npz, n=763,
+# auc=0.9605)로 threshold를 재스캔했다.
+# v1 정책(sens=1.0 유지 마지막 지점을 하한)을 그대로 적용하면 t=0.06까지
+# 내려가 spec=0이 되어 실사용 불가 - 이 pool(GRAPE 포함, 중증도 범위가 넓어짐)
+# 에서는 완전한 FN=0을 요구하는 게 더 이상 현실적이지 않다. 대신 sens>=0.95를
+# 유지하는 마지막 지점을 하한으로 완화(0.30~0.99 사이 0.005 간격 재스캔).
+THR_SUSPECT = 0.170  # "주의 필요" 진입점 (sens>=0.95 유지 마지막 지점, OOF: sens=0.958/spec=0.749)
+THR_HIGH = 0.861     # "높은 위험" 진입점 (Youden's J 최댓값, OOF: sens=0.858/spec=0.963)
 
 
 def _risk_grade(risk_prob):
@@ -746,7 +759,12 @@ def _render_clinician_view(result):
     with ex2:
         st.pyplot(_saliency_figure(result["saliency"]), use_container_width=True)
         st.caption("Concept saliency (gradient×input): 빨강=위험 기여, 파랑=보호 기여 "
-                   "— 공간적 히트맵과 달리 이 수치 기반 근거는 별도 검증 대상 아님")
+                   "— 공간적 히트맵과 달리 이 수치 기반 근거는 별도 검증 대상 아님. "
+                   "기준이 다름 주의: 위 표의 '정상범위'는 값 자체(절대치)를 IQR과 비교하지만, "
+                   "이 그래프는 학습 데이터 평균 대비 표준화 점수(z-score)의 기여도라 "
+                   "값이 정상범위를 벗어나도 z-score가 평균에 가까우면(=이 케이스가 유별나게 "
+                   "낮은 편은 아니면) 기여도가 작게(약한 색으로) 나올 수 있음 — 서로 다른 "
+                   "잣대라 방향이 항상 일치하지는 않음")
 
     # 구조 영상 2열
     st.markdown("###### 합성 OCT · 시신경 구조")
@@ -756,10 +774,10 @@ def _render_clinician_view(result):
     oc2.image(result["seg_overlay"], caption="Disc(초록)/Cup(빨강) Segmentation",
               use_container_width=True, clamp=True)
 
-    # 개념 9종 표
-    st.markdown("###### 시신경/망막 정량 지표 (9종)")
+    # 개념 11종 표
+    st.markdown("###### 시신경/망막 정량 지표 (11종)")
     rows = {"지표": [], "값": [], "정상범위": [], "판정": [], "단위": [], "설명": []}
-    for c in ALL_CONCEPTS:
+    for c in ALL_CONCEPTS_V2:
         v = concept.get(c, float("nan"))
         label, unit, desc, rng, direction = CONCEPT_META.get(c, (c, "", "", None, "high"))
         fmt = (lambda x: f"{x:,.0f}") if unit == "px" else (lambda x: f"{x:.3f}")
@@ -785,12 +803,12 @@ def _render_clinician_view(result):
         rows["단위"].append(unit if unit else "—")
         rows["설명"].append(desc)
     st.dataframe(rows, use_container_width=True, hide_index=True)
-    st.caption("정상범위는 REFUGE+ORIGA+G1020+GAMMA(n=2127) 중 정상 판정군의 IQR(25~75%ile). "
-               "mean_th·ilm_rough·fovea_curv는 fundus에서 예측한 OCT 지표(실측 아님). "
+    st.caption("정상범위는 GAMMA_train+REFUGE+GRAPE(n=758) 중 정상 판정군의 IQR(25~75%ile). "
+               "RNFL Mean/I/S/N/T는 GRAPE(n=244 실측 OCT RNFL) 학습 회귀로 fundus에서 예측한 값(실측 아님). "
                "면적(px)은 512×512 마스크 픽셀 수로 상대 비교용. "
-               "성능: AUROC 0.969 (REFUGE val + GAMMA holdout val, n=418). 모델: glaucoma_cls "
-               f"(unf{CLS_UNFREEZE_LAST_N}+concept_proj{CLS_CONCEPT_PROJ_DIM}"
-               f"+pos_weight{CLS_POS_WEIGHT_SCALE}). 선별 보조용, 확정 진단 아님.")
+               "성능: AUROC 0.963±0.018 (GAMMA+REFUGE+GRAPE pool stratified 5-fold, n=758). 모델: glaucoma_cls v2 "
+               f"(unf{CLS_UNFREEZE_LAST_N}+concept11+concept_proj{CLS_CONCEPT_PROJ_DIM}"
+               "+pos_weight0.6). 선별 보조용, 확정 진단 아님.")
 
 
 def _render_result(result):

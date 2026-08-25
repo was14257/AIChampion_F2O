@@ -22,6 +22,17 @@ SEG_CONCEPTS = ["cdr", "horizontal_cdr", "disc_ovality", "cup_ovality",
 OCT_CONCEPTS = ["mean_th", "ilm_rough", "fovea_curv"]
 ALL_CONCEPTS = SEG_CONCEPTS + OCT_CONCEPTS  # 9 total, fixed order
 
+# v2 (2026-08-09): OCT_CONCEPTS(3, GAMMA 172-image hand-labeled regression)
+# replaced by RNFL_CONCEPTS(5), a fundus->RNFL-thickness regression trained
+# on GRAPE (244 real OCT RNFL measurements: Mean/S/N/I/T quadrants). GRAPE
+# gives more data and covers a wider severity range (all-glaucoma cohort),
+# and 5-fold CV inside GRAPE confirmed r=0.39~0.83 (weakest on N, the
+# quadrant with the least inter-subject variance and least glaucoma
+# sensitivity - see grape_train_rnfl.py). Order fixed as mean/I/S/N/T
+# (ISNT rule order used clinically, mean first).
+RNFL_CONCEPTS = ["rnfl_mean", "rnfl_I", "rnfl_S", "rnfl_N", "rnfl_T"]
+ALL_CONCEPTS_V2 = SEG_CONCEPTS + RNFL_CONCEPTS  # 11 total, fixed order
+
 # Display metadata: (label, unit, short description, normal range(lo,hi), risk direction).
 # Normal range is computed from cbm_concepts.npz (REFUGE+ORIGA+G1020+GAMMA,
 # n=2127, y=glaucoma label), as the IQR (25th-75th percentile) of the
@@ -52,6 +63,19 @@ CONCEPT_META = {
                         (4.13, 5.72), "low"),
     "fovea_curv":     ("Foveal curvature", "1/px",   "foveal concavity (predicted value, negative=concave)",
                         (-0.019, -0.013), "high"),
+    # v2 RNFL concepts: normal range = IQR of label=0 group in
+    # cbm_concepts_v2.npz (GAMMA_train+REFUGE+GRAPE, n=758). Predicted from
+    # fundus via a GRAPE(n=244 real OCT RNFL)-trained regression, thinner=riskier.
+    "rnfl_mean":      ("RNFL Mean thickness", "um", "peripapillary RNFL average thickness (predicted, thinner=riskier)",
+                        (96.3, 111.5), "low"),
+    "rnfl_I":         ("RNFL Inferior thickness", "um", "inferior quadrant RNFL thickness (predicted)",
+                        (116.3, 137.2), "low"),
+    "rnfl_S":         ("RNFL Superior thickness", "um", "superior quadrant RNFL thickness (predicted)",
+                        (116.3, 136.3), "low"),
+    "rnfl_N":         ("RNFL Nasal thickness", "um", "nasal quadrant RNFL thickness (predicted, least sensitive to glaucoma)",
+                        (76.1, 84.5), "low"),
+    "rnfl_T":         ("RNFL Temporal thickness", "um", "temporal quadrant RNFL thickness (predicted)",
+                        (75.5, 90.4), "low"),
 }
 
 
