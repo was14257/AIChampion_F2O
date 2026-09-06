@@ -1,11 +1,3 @@
-"""cbm_concepts.npz(9개: SEG 6 + OCT_CONCEPTS 3)를 대체하는 11-concept
-버전(cbm_concepts_v2.npz)을 생성한다. SEG_CONCEPTS(6) + GRAPE 기반
-RNFL(mean/I/S/N/T)(5) = ALL_CONCEPTS_V2(11). GAMMA 172장 학습 oct_linear
-대신 GRAPE(244장 실측) 학습 PLS 모델(fit_rnfl_pls.py -> grape_rnfl_pls.pkl)을
-쓴다 (glaucoma_cls.eyeon_cbm.EyeonCBM의 rnfl_model 경로 그대로 재사용).
-
-대상: GAMMA_train(100, 라벨 보유) + REFUGE train(400) + GRAPE baseline(263,
-환자당 최초 방문 1장, 전원 glaucoma). GAMMA_test는 라벨이 없어 제외."""
 import pickle
 import sys
 from pathlib import Path
@@ -27,6 +19,7 @@ DEVICE = CFG.runtime.device
 
 
 def gamma_pairs():
+    """Build (path, label) pairs from labeled GAMMA training images."""
     root = CFG.paths.gamma_grading
     df = pd.read_excel(root / "training/glaucoma_grading_training_GT.xlsx")
     out = []
@@ -39,13 +32,14 @@ def gamma_pairs():
 
 
 def refuge_pairs():
+    """Build (path, label) pairs from REFUGE train images (label from filename prefix 'g')."""
     d = CFG.paths.data_root / "REFUGE/train/Images"
     return [(str(p), 1 if p.stem.lower().startswith("g") else 0)
             for p in sorted(d.glob("*.jpg"))]
 
 
 def grape_pairs():
-    """Baseline sheet 자체가 환자당 최초 방문이므로 그대로 사용. 전원 glaucoma(label=1)."""
+    """Build (path, label) pairs from GRAPE baseline visits; all are glaucoma (label=1)."""
     root = CFG.paths.grape
     df = pd.read_excel(root / "VF and clinical information.xlsx",
                        sheet_name="Baseline", header=None, skiprows=2)
@@ -60,12 +54,14 @@ def grape_pairs():
 
 
 def all_pairs():
+    """Combine GAMMA train, REFUGE, and GRAPE pairs for concept extraction."""
     g, r, gr = gamma_pairs(), refuge_pairs(), grape_pairs()
     print(f"GAMMA_train={len(g)}  REFUGE={len(r)}  GRAPE={len(gr)}  total={len(g)+len(r)+len(gr)}")
     return g + r + gr
 
 
 def build_cbm():
+    """Load the frozen segmentation encoder and GRAPE-trained RNFL PLS model, assemble the CBM."""
     seg = build_seg_model(load_weights=True)
     seg_ck = torch.load(CFG.paths.ckpt_dir / "best.pth", map_location="cpu", weights_only=False)
     seg.load_state_dict(seg_ck["model"])
@@ -81,6 +77,7 @@ def build_cbm():
 
 
 def main():
+    """Extract and cache the 11 (SEG + GRAPE-based RNFL) concepts, replacing cbm_concepts.npz."""
     cbm = build_cbm()
     pairs = all_pairs()
 

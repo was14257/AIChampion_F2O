@@ -9,6 +9,7 @@ from config import CFG
 
 
 def _interpolate_pos_embed(encoder: nn.Module, state: dict) -> dict:
+    """Resize checkpoint positional embeddings to match the current encoder's grid size."""
     if "pos_embed" not in state:
         return state
     ckpt_pe = state["pos_embed"]
@@ -35,6 +36,7 @@ def _interpolate_pos_embed(encoder: nn.Module, state: dict) -> dict:
 
 def load_retfound_encoder(weights_path: Path | None = None,
                           verbose: bool = True) -> nn.Module:
+    """Build a ViT encoder and load pretrained RETFound weights into it."""
     mcfg = CFG.model
     encoder = timm.create_model(
         mcfg.backbone,
@@ -82,6 +84,8 @@ def load_retfound_encoder(weights_path: Path | None = None,
 
 
 class _FuseBlock(nn.Module):
+    """Channel-reduce and refine a single encoder feature map."""
+
     def __init__(self, in_dim: int, out_dim: int):
         super().__init__()
         self.reduce = nn.Conv2d(in_dim, out_dim, kernel_size=1)
@@ -96,6 +100,8 @@ class _FuseBlock(nn.Module):
 
 
 class RetFoundSegmenter(nn.Module):
+    """Segmentation model combining a RETFound ViT encoder with a conv decoder head."""
+
     def __init__(self,
                  encoder: nn.Module | None = None,
                  load_weights: bool = True):
@@ -137,6 +143,7 @@ class RetFoundSegmenter(nn.Module):
 
     @staticmethod
     def _up(cin, cout):
+        # 2x upsampling block: upsample + conv + BN + ReLU.
         return nn.Sequential(
             nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
             nn.Conv2d(cin, cout, 3, padding=1, bias=False),
@@ -145,6 +152,7 @@ class RetFoundSegmenter(nn.Module):
         )
 
     def forward(self, x):
+        # Extract multi-layer encoder features, fuse them, and decode to segmentation logits.
         feats = self.encoder.get_intermediate_layers(
             x,
             n=self.feature_idx,
@@ -163,6 +171,7 @@ class RetFoundSegmenter(nn.Module):
         return logits
 
     def param_groups(self):
+        """Split trainable parameters into encoder and decoder groups (for separate LRs)."""
         enc, dec = [], []
         for n, p in self.named_parameters():
             if not p.requires_grad:
@@ -172,4 +181,5 @@ class RetFoundSegmenter(nn.Module):
 
 
 def build_model(load_weights: bool = True) -> RetFoundSegmenter:
+    """Construct a RetFoundSegmenter model."""
     return RetFoundSegmenter(load_weights=load_weights)

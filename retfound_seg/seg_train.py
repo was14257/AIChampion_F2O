@@ -12,6 +12,7 @@ from retfound_seg.model import build_model
 
 
 def set_seed(seed: int):
+    """Seed all RNGs used for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -19,6 +20,7 @@ def set_seed(seed: int):
 
 
 def lr_lambda_factory(warmup, total):
+    """Return an LR schedule function: linear warmup then cosine decay."""
     def fn(epoch):
         if epoch < warmup:
             return (epoch + 1) / max(1, warmup)
@@ -29,6 +31,7 @@ def lr_lambda_factory(warmup, total):
 
 @torch.no_grad()
 def evaluate(model, loader, device):
+    """Compute average disc/cup dice scores over a validation loader."""
     model.eval()
     disc_sum, cup_sum, n = 0.0, 0.0, 0
     for batch in loader:
@@ -43,6 +46,7 @@ def evaluate(model, loader, device):
 
 
 def main():
+    """Train the segmentation model and save checkpoints based on validation dice."""
     tc, rc = CFG.train, CFG.runtime
     device = torch.device(rc.device)
     set_seed(tc.seed)

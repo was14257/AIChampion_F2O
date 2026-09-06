@@ -12,6 +12,7 @@ from config import CFG
 
 
 def _pair_files(img_dir: Path, mask_dir: Path) -> list[tuple[Path, Path]]:
+    """Match each image with its corresponding mask file by filename stem."""
     pairs: list[tuple[Path, Path]] = []
     for img_path in sorted(img_dir.glob("*.jpg")):
         mask_path = mask_dir / f"{img_path.stem}.png"
@@ -25,6 +26,8 @@ def _pair_files(img_dir: Path, mask_dir: Path) -> list[tuple[Path, Path]]:
 
 
 class RefugeSegDataset(Dataset):
+    """REFUGE image/mask segmentation dataset for a given split."""
+
     def __init__(self, split: str, train_aug: bool = False,
                  merge_train_val: bool = False):
         self.split = split
@@ -73,6 +76,7 @@ class RefugeSegDataset(Dataset):
         return len(self.pairs)
 
     def _load(self, img_path: Path, mask_path: Path):
+        # Load and resize an image/mask pair to the configured input size.
         size = self.cfg.img_size
         img = Image.open(img_path).convert("RGB").resize(
             (size, size), Image.BILINEAR
@@ -85,6 +89,7 @@ class RefugeSegDataset(Dataset):
         return img, mask
 
     def __getitem__(self, idx: int):
+        """Load, augment, and normalize one image/mask sample."""
         img_path, mask_path = self.pairs[idx]
         img, mask = self._load(img_path, mask_path)
 
@@ -107,6 +112,7 @@ class RefugeSegDataset(Dataset):
 def build_loader(split: str, batch_size: int, shuffle: bool,
                  train_aug: bool = False,
                  merge_train_val: bool = False) -> DataLoader:
+    """Build a DataLoader wrapping RefugeSegDataset for the given split."""
     ds = RefugeSegDataset(split, train_aug=train_aug, merge_train_val=merge_train_val)
     return DataLoader(
         ds,

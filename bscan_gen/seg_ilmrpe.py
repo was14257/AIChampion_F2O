@@ -1,5 +1,3 @@
-import glob
-import os
 import random
 import sys
 import warnings
@@ -34,6 +32,7 @@ HORIG = CFG.oct_tier1.horig
 
 
 def dbl(i, o):
+    """Double conv block: Conv-BN-ReLU twice."""
     return nn.Sequential(
         nn.Conv2d(i, o, 3, padding=1), nn.BatchNorm2d(o), nn.ReLU(True),
         nn.Conv2d(o, o, 3, padding=1), nn.BatchNorm2d(o), nn.ReLU(True),
@@ -41,6 +40,7 @@ def dbl(i, o):
 
 
 class UNet(nn.Module):
+    """U-Net that outputs per-column logits over row position for the ILM and RPE lines."""
 
     def __init__(self):
         super().__init__()
@@ -58,6 +58,7 @@ class UNet(nn.Module):
         self.out = nn.Conv2d(32, 2, 1)
 
     def forward(self, x):
+        """Encoder-decoder forward pass with skip connections."""
         e1 = self.d1(x)
         e2 = self.d2(self.p(e1))
         e3 = self.d3(self.p(e2))
@@ -69,12 +70,14 @@ class UNet(nn.Module):
 
 
 def soft_argmax(logits):
+    """Differentiable row-position estimate from per-row softmax logits."""
     p = F.softmax(logits, dim=2)
     idx = torch.arange(logits.shape[2], device=logits.device).view(1, 1, -1, 1)
     return (p * idx).sum(2)
 
 
 class DS(torch.utils.data.Dataset):
+    """Dataset of B-scan images and their ILM/RPE row-position labels, with optional augmentation."""
 
     def __init__(self, ids, train):
         self.ids = ids
@@ -84,6 +87,7 @@ class DS(torch.utils.data.Dataset):
         return len(self.ids)
 
     def __getitem__(self, i):
+        """Load one sample, applying flip/shift/brightness/noise augmentation when training."""
         c = self.ids[i]
         img = np.asarray(Image.open(BSC / f"{c}.png").convert("L"))
         d = np.load(LINES / f"{c}.npz")
@@ -106,10 +110,11 @@ class DS(torch.utils.data.Dataset):
 
 
 def train():
+    """Train the ILM/RPE segmentation U-Net, saving the best checkpoint by validation MAE."""
     epochs = CFG.oct_tier1.seg_epochs
     OUTM.mkdir(parents=True, exist_ok=True)
     ids = [
-        os.path.basename(f)[:4] for f in sorted(glob.glob(str(LINES / "*.npz")))
+        f.name[:4] for f in sorted(LINES.glob("*.npz"))
         if not (np.isnan(np.load(f)["ilm"]).any() or np.isnan(np.load(f)["rpe"]).any())
     ]
     random.seed(0)
@@ -154,6 +159,7 @@ def train():
 
 @torch.no_grad()
 def predict():
+    """Run the trained segmentation model over volumes to produce pseudo ILM/RPE labels and QC overlays."""
     volumes = CFG.oct_tier1.seg_predict_volumes
     slices_per_vol = CFG.oct_tier1.seg_slices_per_vol
     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -165,18 +171,18 @@ def predict():
     (outdir / "lines").mkdir(parents=True, exist_ok=True)
     (outdir / "overlays").mkdir(exist_ok=True)
     vols = sorted([
-        p for p in glob.glob(str(GMM / "**/multi-modality_images/*/*"), recursive=True)
-        if os.path.isdir(p) and glob.glob(os.path.join(p, "*_image.jpg"))
+        p for p in GMM.glob("**/multi-modality_images/*/*")
+        if p.is_dir() and list(p.glob("*_image.jpg"))
     ])
     if volumes:
-        vols = [v for v in vols if os.path.basename(v) in volumes]
+        vols = [v for v in vols if v.name in volumes]
 
     n = 0
     for v in vols:
-        cid = os.path.basename(v)
+        cid = v.name
         sl = sorted(
-            glob.glob(os.path.join(v, "*_image.jpg")),
-            key=lambda p: int(os.path.basename(p).split("_")[0]),
+            v.glob("*_image.jpg"),
+            key=lambda p: int(p.name.split("_")[0]),
         )
         if not sl:
             continue
@@ -185,7 +191,7 @@ def predict():
             sl = [sl[i] for i in idx]
 
         for sp in sl:
-            si = os.path.basename(sp).split("_")[0]
+            si = sp.name.split("_")[0]
             arr = np.asarray(Image.open(sp).convert("L"))
             g = np.asarray(Image.fromarray(arr).resize((W, HS), Image.BILINEAR), np.float32) / 255.
             pd = soft_argmax(m(torch.from_numpy(g)[None, None].to(dev)))[0].cpu().numpy()

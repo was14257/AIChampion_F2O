@@ -1,12 +1,3 @@
-"""EYEON Streamlit 앱 — Downloads/EYEON/EYEON_clean_start/app.py의 로그인 화면과
-디자인(카드 스타일, metric 레이아웃)을 그대로 재현하되, 고정 샘플 결과 대신
-실제 모델 파이프라인(OOD gate, glaucoma risk, concept 9개, Stage A/B 합성 OCT)을
-붙인 버전. 원본 app.py는 그대로 두고 이 파일만 새로 추가.
-
-모델 로더/파이프라인은 원래 별도 Gradio 데모(e2e_demo.py)에 있었으나, Gradio UI
-자체는 실제로 안 쓰이고 이 Streamlit 앱만 운영되어(2026-07-27) e2e_demo.py를
-없애고 로더/유틸 부분만 이 파일로 병합했다.
-"""
 import os
 import secrets
 import sys
@@ -43,10 +34,8 @@ from local_config import CLS_UNFREEZE_LAST_N, CLS_CONCEPT_PROJ_DIM
 from glaucoma_cls.explain import concept_saliency, attention_rollout, overlay_heatmap, mc_dropout_ci
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-# v2 (2026-08-09): concept을 9개(SEG6+OCT_CONCEPTS3, GAMMA 172장 학습)에서
-# 11개(SEG6+RNFL5, GRAPE 244장 실측 학습)로 교체. GAMMA+REFUGE+GRAPE 전체를
-# 하나의 pool로 묶어 stratified 5-fold로 재학습(temp/cv_v2_11concept.py) -
-# spec이 0.85~0.90으로 안정적이고 AUC 0.963으로 기존 no_grape 기준(0.975)에 근접.
+# v2: 11 concepts (SEG6+RNFL5) trained on GAMMA+REFUGE+GRAPE pool (stratified
+# 5-fold) instead of the old 9-concept GAMMA-only setup.
 GLAUCOMA_CKPT = CFG.paths.output_root / "glaucoma_cls" / "glaucoma_v2_11concept_bestfold.pth"
 SEG_CKPT = CFG.paths.ckpt_dir / "best.pth"
 CONCEPT_NPZ_V2 = CFG.paths.oct_features / "cbm_concepts_v2.npz"
@@ -60,17 +49,16 @@ _models = {}
 
 
 def _load_all():
-    """모든 모델을 한 번만 로드해서 전역 캐시에 담는다(Streamlit이 요청마다
-    새로 만들지 않도록)."""
+    """Load all models once into a global cache so Streamlit doesn't reload per request."""
     if _models:
         return _models
 
-    print("모델 로딩 중...")
+    print("Loading models...")
 
     # --- OOD gate ---
     _models["ood_gate"] = OODGate()
 
-    # --- concept 계산용: segmentation + OCT-regression 인코더 ---
+    # --- Encoders for concept computation: segmentation + OCT-regression ---
     seg_model = build_seg_model(load_weights=True)
     seg_ck = torch.load(SEG_CKPT, map_location="cpu", weights_only=False)
     seg_model.load_state_dict(seg_ck["model"])
@@ -86,7 +74,7 @@ def _load_all():
     _models["cbm"] = EyeonCBM(seg_model, oct_enc, oct_linear=None,
                               rnfl_model=rnfl_model).to(DEVICE)
 
-    # --- glaucoma risk 분류기 (concept 11개 결합, v2) ---
+    # --- Glaucoma risk classifier (fused with 11 concepts, v2) ---
     concept_table, n_concepts = _load_concept_table_v2()
     clf = GlaucomaNet(freeze_encoder=True, unfreeze_last_n=CLS_UNFREEZE_LAST_N,
                       n_concepts=n_concepts, concept_proj_dim=CLS_CONCEPT_PROJ_DIM).to(DEVICE)
@@ -98,19 +86,19 @@ def _load_all():
     _models["concept_stats"] = _fit_concept_norm_v2(concept_table, n_concepts)
     _models["n_concepts"] = n_concepts
 
-    # --- Stage A: fundus 임베딩 -> 두께 프로파일 PLS (172개 손라벨로 최종 fit) ---
+    # --- Stage A: fundus embedding -> thickness profile PLS (final-fit on 172 hand-labeled cases) ---
     _models["stageA"] = _fit_stage_a()
 
     # --- Stage B: diffusion UNet ---
     _models["unet"] = D.load_unet(DIFF_SPEC, DEVICE)
 
-    print("모델 로딩 완료")
+    print("Model loading complete")
     return _models
 
 
 def _load_concept_table_v2():
-    """cbm_concepts_v2.npz(11개: SEG6+RNFL5, GAMMA_train+REFUGE+GRAPE
-    n=758)를 파일명 -> concept vector 딕셔너리로 로드."""
+    """Load cbm_concepts_v2.npz (11 concepts: SEG6+RNFL5, GAMMA_train+REFUGE+GRAPE, n=758)
+    as a filename -> concept vector dict."""
     from pathlib import Path
     d = np.load(CONCEPT_NPZ_V2, allow_pickle=True)
     paths = d["paths"].tolist()
@@ -119,9 +107,9 @@ def _load_concept_table_v2():
 
 
 def _fit_concept_norm_v2(concept_table, n_concepts):
-    """v2 학습(temp/cv_v2_11concept.py)은 GAMMA_train+REFUGE+GRAPE 전체
-    pool(n=758)에 대한 concept 정규화 통계를 그대로 재현한다(fold별로 조금씩
-    다르지만 배포용은 전체 pool 통계로 통일)."""
+    """Reproduce the concept normalization stats used in v2 training
+    (temp/cv_v2_11concept.py): full GAMMA_train+REFUGE+GRAPE pool (n=758),
+    unified across folds for deployment."""
     X = np.stack(list(concept_table.values()))
     mean = X.mean(axis=0)
     std = X.std(axis=0)
@@ -130,9 +118,9 @@ def _fit_concept_norm_v2(concept_table, n_concepts):
 
 
 def _fit_stage_a():
-    """bscan_gen/fundus_to_oct_e2e.py의 Stage A를 그대로 재현: 172개 손라벨
-    임베딩으로 PLS를 최종 fit하고, RPE 평균 모양/개인화용 172개 RPE shape도
-    같이 반환한다."""
+    """Reproduce Stage A from bscan_gen/fundus_to_oct_e2e.py: final-fit PLS on
+    172 hand-labeled embeddings, also returning the 172 RPE shapes used for
+    mean shape / personalization."""
     FEAT = CFG.paths.oct_features / "features.csv"
     EMB = CFG.paths.oct_features / "emb_whole_final.npz"
     LINES = CFG.paths.oct_labels / "lines"
@@ -170,10 +158,10 @@ def _fit_stage_a():
 
 
 def _build_ilm_rpe(TH_w, sA):
-    """RPE 모양(tilt 등)은 fundus로 예측 불가(CLAUDE.md 4절, skill~0.1)라, 예측된
-    두께 프로파일(TH_w)과 가장 비슷한 손라벨 172개 케이스의 실제 RPE 모양을
-    빌려와 다양성을 준다 (12절 "다 똑같아 보임" 개선 로직, fundus_to_oct_e2e.py
-    Stage A와 동일한 최근접 매칭)."""
+    """RPE shape (tilt etc.) can't be predicted from fundus, so borrow the real
+    RPE shape from the hand-labeled case with the closest thickness profile
+    (nearest-neighbor match, same as Stage A in fundus_to_oct_e2e.py) to add
+    variety instead of a flat shape."""
     nn_idx = int(np.argmin(((TH_w[None, :] - sA["TH"]) ** 2).mean(axis=1)))
     rpe_g = sA["base"] + sA["rpe_shapes"][nn_idx]
     ilm_g = rpe_g - TH_w
@@ -186,13 +174,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# 로그인 정보. 저장소에 평문으로 남기지 않으려고 환경변수 -> local_config.py
-# (.gitignore 대상) 순으로 읽는다. 둘 다 없으면 로그인 자체를 막는다 - 기본
-# 비밀번호를 코드에 박아두면 그게 그대로 배포로 나가기 때문.
+# Login credentials: read from env var, fall back to local_config.py (gitignored)
+# so nothing plaintext ends up in the repo. Login is blocked if neither is set.
 LOGIN_ID = os.environ.get("EYEON_LOGIN_ID") or getattr(_lc, "LOGIN_ID", None)
 LOGIN_PASSWORD = os.environ.get("EYEON_LOGIN_PASSWORD") or getattr(_lc, "LOGIN_PASSWORD", None)
 
-# 화면 스타일 (원본 app.py의 CSS 그대로)
+# Page styling (same CSS as the original app.py)
 st.markdown(
     """
     <style>
@@ -274,7 +261,7 @@ st.markdown(
             font-weight: 700;
         }
 
-        /* 환자용 결과 히어로 카드 */
+        /* Patient-view result hero card */
         .hero-card {
             border-radius: 18px;
             padding: 1.6rem 1.8rem;
@@ -288,7 +275,7 @@ st.markdown(
         .hero-amber  { background: linear-gradient(135deg,#e08a2b,#c56a12); }
         .hero-red    { background: linear-gradient(135deg,#d6483f,#b02a22); }
 
-        /* 단계별 안내 스텝 */
+        /* Step-by-step guidance boxes */
         .step-box {
             border: 1px solid #dce4ec; border-radius: 14px;
             padding: 1rem 1.2rem; margin-bottom: 0.8rem; background: #ffffff;
@@ -342,8 +329,8 @@ def login_page():
             )
 
         if submitted:
-            # compare_digest로 타이밍 공격 여지를 줄인다(입력이 비어도
-            # 위 가드 때문에 빈 자격증명과 일치하는 일은 없음).
+            # compare_digest reduces timing-attack surface (the guard above
+            # already ensures empty credentials never match).
             ok = (secrets.compare_digest(user_id, LOGIN_ID) and
                   secrets.compare_digest(password, LOGIN_PASSWORD))
             if ok:
@@ -357,24 +344,21 @@ def login_page():
 
 @torch.no_grad()
 def run_analysis(img: Image.Image, progress_bar, eye_side: str = "auto"):
-    """모델 파이프라인(OOD gate -> concept 9개 -> risk score -> Stage A 두께
-    예측 -> Stage B diffusion) 전체를 실행. streamlit progress bar를 그때그때
-    갱신한다.
+    """Run the full model pipeline (OOD gate -> 11 concepts -> risk score ->
+    Stage A thickness prediction -> Stage B diffusion), updating the
+    streamlit progress bar along the way.
 
-    eye_side: "auto"(기본, disc segmentation으로 자동 판별) / "OD"(우안) /
-    "OS"(좌안). Stage A/B 학습 데이터(GAMMA 172개 손라벨, laterality.csv
-    기준 OD 119 / OS 81)가 좌우 flip 없이 섞인 채로 학습되어 nasal/temporal
-    방향이 case마다 뒤바뀐 상태다. flip 재학습으로 해결을 시도했으나 오히려
-    악화됨을 확인(CLAUDE.md 미결 항목 참고, RETFound 임베딩이 좌우 flip에
-    거의 불변이라 근본 해결 불가) - 재학습 대신 표시 단계에서 OD 기준으로
-    생성한 뒤 OS면 두께 profile과 이미지 결과물을 좌우 반전해 nasal/temporal
-    방향을 사용자가 실제로 보는 눈과 맞춘다.
+    eye_side: "auto" (default, inferred from disc position) / "OD" / "OS".
+    Stage A/B training data mixed OD/OS without left-right flipping, so
+    nasal/temporal direction is inconsistent per case; RETFound embeddings
+    are nearly flip-invariant so retraining with flips didn't fix it. Instead
+    we generate as OD by default and flip the thickness profile/images for OS
+    to match what the user actually sees.
 
-    auto 판별 근거: disc(시신경유두)는 항상 fovea 기준 nasal(코쪽) 방향에
-    있고 OD는 nasal이 오른쪽/OS는 왼쪽이므로, disc가 fovea보다 어느 쪽에
-    있는지로 laterality가 완벽히 갈린다(GAMMA 200장 검증 100%). 이 데모는
-    fovea 검출기가 없어 대신 '이미지 정중앙'을 근사치로 쓴다(표준 촬영에서
-    fovea가 대체로 중앙 근처에 옴) - 같은 200장 기준 정확도 94%(188/200)."""
+    Auto-detection: the optic disc always sits nasal to the fovea (right of
+    center for OD, left for OS), so disc-vs-fovea position perfectly
+    separates laterality (100% on GAMMA n=200). No fovea detector here, so we
+    approximate with image center (94%, 188/200 on the same set)."""
     from bscan_gen.utils import _retfound_tf
 
     m = _load_all()
@@ -386,9 +370,9 @@ def run_analysis(img: Image.Image, progress_bar, eye_side: str = "auto"):
         return {"ood_reject": True, "ood_dist": ood_dist, "ood_thr": m["ood_gate"].thr}
 
     progress_bar.progress(20, text="시신경 구조 분석 중… (concept 11개 계산)")
-    # predict_from_path가 경로를 요구해서 업로드 이미지를 임시 저장한다. 예전엔
-    # 고정 파일명이라 동시 요청 시 서로 덮어쓸 수 있었어서 요청마다 고유 파일을
-    # 만들고 끝나면 지운다.
+    # predict_from_path needs a path, so save the uploaded image to a unique
+    # temp file per request (a fixed filename previously let concurrent
+    # requests overwrite each other) and clean up afterward.
     with tempfile.TemporaryDirectory(prefix="eyeon_") as tmp_dir:
         tmp_path = Path(tmp_dir) / "input.png"
         img.save(tmp_path)
@@ -400,12 +384,12 @@ def run_analysis(img: Image.Image, progress_bar, eye_side: str = "auto"):
 
     inferred_eye_side = _infer_eye_side(disc_x_rel)
     if eye_side == "auto":
-        eye_side = inferred_eye_side or "OD"  # 판별 실패 시 기존 기본값(OD)으로
+        eye_side = inferred_eye_side or "OD"  # fall back to OD if detection fails
 
     progress_bar.progress(45, text="질환 위험도 산출 중…")
-    # glaucoma_cls(GlaucomaNet)는 2026-07-30부터 종횡비 보존 center-crop(24절)으로
-    # 재학습됨 - Stage A/B/concept 추출이 쓰는 공용 _retfound_tf()(crop 없이 그냥
-    # Resize)를 그대로 쓰면 학습/추론 전처리가 어긋나므로 clf 전용 transform을 쓴다.
+    # GlaucomaNet was retrained with aspect-ratio-preserving center-crop, unlike
+    # the shared _retfound_tf() (plain Resize, no crop) used by Stage A/B and
+    # concept extraction, so it needs its own preprocessing transform here.
     x = transforms.Compose([
         transforms.Lambda(_letterbox_square),
         transforms.Resize((224, 224)),
@@ -415,15 +399,15 @@ def run_analysis(img: Image.Image, progress_bar, eye_side: str = "auto"):
     c_in = torch.from_numpy(concept_vec_norm).float().unsqueeze(0).to(DEVICE)
     risk_prob = torch.sigmoid(m["clf"](x, c_in)).item()
 
-    # MC-dropout 신뢰구간: dropout을 켠 채 30회 forward한 예측 분포로 CI 산출.
-    # 구간이 좁으면 확신 높음, 넓으면 불확실 (이미지 특징 경로의 불확실성).
+    # MC-dropout CI: 30 forward passes with dropout on give a prediction
+    # distribution; a narrow interval means high confidence, wide means uncertain.
     progress_bar.progress(48, text="예측 신뢰구간 추정 중… (MC-dropout)")
     risk_ci = mc_dropout_ci(m["clf"], x, c_in, n=30)
 
-    # --- 설명가능성 2경로 (post-hoc): concept 기여도 + attention 지도 ---
-    # attention map은 Grad-CAM보다 disc(시신경유두)를 잘 짚는 Attention Rollout을
-    # 쓴다 (ViT엔 rollout이 더 자연스럽고, 배경/테두리 아티팩트가 적음).
-    # concept_saliency는 backward가 필요해 enable_grad, rollout은 no_grad로 충분.
+    # --- Two post-hoc explainability paths: concept saliency + attention map ---
+    # Attention Rollout is used over Grad-CAM since it localizes the optic disc
+    # better for ViTs and has fewer background/border artifacts.
+    # concept_saliency needs backward (enable_grad); rollout only needs no_grad.
     progress_bar.progress(52, text="판단 근거 분석 중… (concept 기여도 + attention)")
     with torch.enable_grad():
         saliency = concept_saliency(m["clf"], x, c_in, concept_names=ALL_CONCEPTS_V2)
@@ -438,25 +422,23 @@ def run_analysis(img: Image.Image, progress_bar, eye_side: str = "auto"):
     TH_w = sA["mean_th"] + sA["wgt"] * (TH_pred - sA["mean_th"])
     ilm, rpe = _build_ilm_rpe(TH_w, sA)
 
-    # Stage A/B 학습 데이터(GAMMA 손라벨)가 OD/OS 구분 없이 좌우 flip을 안 한
-    # 채로 섞여 학습됐다(위 함수 docstring 참고). OD 기준으로 생성하는 게
-    # 기본이므로, 입력이 OS면 두께 profile을 좌우 반전해 nasal/temporal 방향을
-    # 실제 눈과 맞춘 뒤 diffusion 조건으로 넘긴다.
+    # Generation defaults to OD (see docstring above); flip the thickness
+    # profile for OS inputs so nasal/temporal direction matches the real eye
+    # before passing it as the diffusion condition.
     if eye_side == "OS":
         ilm, rpe = ilm[::-1].copy(), rpe[::-1].copy()
 
     cond = D.build_cond_for(ilm, rpe, DIFF_SPEC)
     cond_t = torch.from_numpy(cond)[None, None].to(DEVICE)
 
-    # DDIM(eta=0)은 결정론적이지만 시작 노이즈가 매번 랜덤이라 speckle 패턴이
-    # 샘플마다 달라진다(CLAUDE.md 12절). 5장 생성해 가장 매끄러운(speckle 적은)
-    # 1장을 자동 선택 - "더 정확한" 선택이 아니라 "더 보기 좋은" 선택이다(구조는
-    # 5장 다 동일 조건이라 같음, speckle만 다름).
-    # 5장을 순차 for-loop(각 100 step)로 돌리면 UNet forward를 500번 하게 되어
-    # 느림 - ddim_sample이 배치 차원을 지원하므로 cond를 5개로 repeat해 한 번의
-    # 호출로 배치 샘플링(forward 100번, 배치 크기만 5). GPU 서버(전용 16GB)
-    # 기준 512x512 1채널 conv UNet의 배치 5 activation 메모리는 여유 있게 들어감 -
-    # VRAM이 빠듯한 환경에서 OOM 나면 N_SAMPLES를 줄일 것.
+    # DDIM (eta=0) is deterministic but the starting noise is random each time,
+    # so speckle pattern varies across samples. We generate 5 and auto-pick the
+    # smoothest (least speckle) one — this only picks the nicer-looking sample,
+    # not a more accurate one (structure is identical across all 5, only
+    # speckle differs).
+    # Looping 5x sequentially would mean 500 UNet forward calls; instead we
+    # repeat cond into a batch of 5 and sample once (100 forward calls, batch
+    # size 5). Reduce N_SAMPLES if this OOMs on tighter VRAM budgets.
     N_SAMPLES = 5
 
     def _diff_progress(k, total):
@@ -470,7 +452,7 @@ def run_analysis(img: Image.Image, progress_bar, eye_side: str = "auto"):
     candidates = [gen_imgs[i] for i in range(N_SAMPLES)]
 
     def _speckle_score(im):
-        """고주파(speckle) 에너지 - 낮을수록 매끄러움(=보기 좋음)."""
+        """High-frequency (speckle) energy — lower means smoother/nicer looking."""
         from scipy.ndimage import gaussian_filter
         f = im.astype(np.float32)
         hf = f - gaussian_filter(f, sigma=1.5)
@@ -499,9 +481,9 @@ def run_analysis(img: Image.Image, progress_bar, eye_side: str = "auto"):
 
 
 def _saliency_figure(saliency: dict):
-    """concept 기여도(gradient*input)를 절댓값 크기순 가로 막대로 그린다.
-    빨강=위험 방향(+), 파랑=보호 방향(-). Windows 기본 한글 폰트(맑은 고딕)를
-    지정해 CONCEPT_META의 한글 라벨을 그대로 표시(영문 키보다 직관적)."""
+    """Horizontal bar chart of concept saliency (gradient*input), sorted by
+    absolute magnitude. Red=risk-increasing, blue=protective. Uses Malgun
+    Gothic so CONCEPT_META's Korean labels render correctly."""
     import matplotlib
     matplotlib.use("Agg")
     matplotlib.rcParams["font.family"] = "Malgun Gothic"
@@ -529,13 +511,14 @@ def _saliency_figure(saliency: dict):
 
 
 def _disc_cup_overlay(cbm, img: Image.Image) -> tuple:
-    """cbm.EyeonCBM의 seg_model로 disc/cup을 분할해 원본 fundus 위에 오버레이한
-    이미지를 만든다 (사용자 요청: 조건 sketch 대신 실제 C/D segmentation 결과를
-    보여줌). retfound_seg.cdr.postprocess_label 규약: 0=배경, disc_rim 값=disc,
-    cup 값=cup (glaucoma_cls.eyeon_cbm.EyeonCBM.predict_from_path과 동일 전처리/후처리).
+    """Segment disc/cup with cbm's seg_model and overlay them on the original
+    fundus image (shows the actual C/D segmentation instead of a condition
+    sketch). Follows retfound_seg.cdr.postprocess_label's label convention
+    (0=background, disc_rim=disc, cup=cup), matching
+    glaucoma_cls.eyeon_cbm.EyeonCBM.predict_from_path's pre/post-processing.
 
-    반환값에 disc 중심의 x좌표(0~1, 이미지 폭 대비 상대위치)도 함께 준다 -
-    좌우안(OD/OS) 자동 판별용(_infer_eye_side 참고)."""
+    Also returns the disc center's relative x-position (0-1) for OD/OS
+    auto-detection (see _infer_eye_side)."""
     from config import CFG
     from glaucoma_cls.eyeon_cbm import _preprocess_from_image
     from retfound_seg.cdr import postprocess_label, masks_from_label
@@ -548,7 +531,7 @@ def _disc_cup_overlay(cbm, img: Image.Image) -> tuple:
     size = CFG.data.img_size
     base = np.asarray(img.resize((size, size), Image.BILINEAR).convert("RGB"), dtype=np.float32)
     overlay = base.copy()
-    # disc 윤곽은 초록, cup 윤곽은 빨강 (반투명 채우기 + 테두리)
+    # Disc outline in green, cup outline in red (semi-transparent fill)
     disc_fill = np.zeros_like(base); disc_fill[disc] = [46, 204, 113]
     cup_fill = np.zeros_like(base); cup_fill[cup] = [217, 54, 62]
     overlay = np.where(disc[..., None], overlay * 0.55 + disc_fill * 0.45, overlay)
@@ -561,22 +544,21 @@ def _disc_cup_overlay(cbm, img: Image.Image) -> tuple:
 
 
 def _infer_eye_side(disc_x_rel: float) -> str | None:
-    """disc(시신경유두) 중심이 이미지 정중앙보다 오른쪽이면 OD, 왼쪽이면 OS로
-    판별한다. laterality.csv(GAMMA 200장) 검증 결과 이미지 중심 대비 disc
-    위치만으로 94%(188/200) 정확도, fovea 대비 위치로는 100%(단 fovea 검출기가
-    없어 fovea 기준은 못 씀) - 표준 fundus 촬영에서 fovea가 대체로 이미지
-    중심 근처에 오기 때문에 '이미지 중심'이 fovea의 실용적 근사치로 작동한다.
-    disc가 검출 안 됐거나(OOD 등) 중심에 걸쳐 있으면 판별 보류(None)."""
+    """Classify OD if the disc center is right of image center, OS if left.
+    Validated at 94% (188/200) on GAMMA laterality.csv using image-center as a
+    fovea proxy (no fovea detector available; fovea-relative position would
+    give 100% but we don't have that). Returns None if disc wasn't detected
+    or sits too close to center to trust."""
     if disc_x_rel != disc_x_rel:  # NaN
         return None
-    if abs(disc_x_rel - 0.5) < 0.03:  # 중심 근처는 판별 신뢰도 낮음
+    if abs(disc_x_rel - 0.5) < 0.03:  # too close to center to trust
         return None
     return "OD" if disc_x_rel > 0.5 else "OS"
 
 
 def _confidence_from_ci(ci: dict) -> tuple:
-    """MC-dropout CI 폭으로 신뢰도 등급을 매긴다.
-    구간이 좁을수록(예측이 안 흔들릴수록) 확신 높음."""
+    """Grade confidence by MC-dropout CI width — narrower interval means
+    more stable prediction, hence higher confidence."""
     width = ci["hi"] - ci["lo"]
     if width < 0.10:
         return "높음", "🟢"
@@ -585,41 +567,25 @@ def _confidence_from_ci(ci: dict) -> tuple:
     return "낮음", "🔴"
 
 
-# 판정 threshold (raw risk 기준). 재학습마다 재산출해야 하는 값이라 한 곳에만
-# 두고 화면/PDF가 모두 여기를 참조한다 - 예전엔 report_pdf.py가 옛 값(21%)을
-# 따로 하드코딩하고 있어 리포트에만 폐기된 기준이 찍히는 문제가 있었다.
-# 2026-08-09: v2(concept 11개=RNFL 추가, GAMMA+REFUGE+GRAPE pool 학습) 기준
-# 재보정. Out-of-fold 확률(각 샘플이 자신이 val일 때 낸 예측만 모음 - leakage
-# 없음, glaucoma_cls/train_v2.py가 저장하는 oof_v2_11concept.npz, n=763,
-# auc=0.9605)로 threshold를 재스캔했다.
-# v1 정책(sens=1.0 유지 마지막 지점을 하한)을 그대로 적용하면 t=0.06까지
-# 내려가 spec=0이 되어 실사용 불가 - 이 pool(GRAPE 포함, 중증도 범위가 넓어짐)
-# 에서는 완전한 FN=0을 요구하는 게 더 이상 현실적이지 않다. 대신 sens>=0.95를
-# 유지하는 마지막 지점을 하한으로 완화(0.30~0.99 사이 0.005 간격 재스캔).
-THR_SUSPECT = 0.170  # "주의 필요" 진입점 (sens>=0.95 유지 마지막 지점, OOF: sens=0.958/spec=0.749)
-THR_HIGH = 0.861     # "높은 위험" 진입점 (Youden's J 최댓값, OOF: sens=0.858/spec=0.963)
+# Decision thresholds (on raw risk). Kept in one place so screen/PDF stay in
+# sync (previously report_pdf.py hardcoded a stale value separately).
+# Recalibrated for v2 (11 concepts incl. RNFL, GAMMA+REFUGE+GRAPE pool) using
+# out-of-fold probabilities (oof_v2_11concept.npz, n=763, auc=0.9605, no
+# leakage). Requiring sens=1.0 (v1 policy) collapses spec to 0 on this wider
+# pool, so the floor is relaxed to the last point keeping sens>=0.95.
+THR_SUSPECT = 0.170  # "needs attention" entry point (last point with sens>=0.95; OOF sens=0.958/spec=0.749)
+THR_HIGH = 0.861     # "high risk" entry point (max Youden's J; OOF sens=0.858/spec=0.963)
 
 
 def _risk_grade(risk_prob):
-    """위험도 → (등급명, hero CSS 클래스, 한줄결론, 상세설명, 권장행동).
+    """Map risk -> (grade name, hero CSS class, headline, detail, recommended action).
 
-    경계값(0.60 / 0.66)은 REFUGE val 399장(학습에 전혀 안 쓰인 진짜 held-out)
-    실측으로 재보정한 값이다(2026-07-30, 24절 crop 수정 후 재학습 반영).
-    이전 threshold(0.21/0.5, 2026-07-27 기록)는 letterbox→crop 전처리 수정
-    (24절)으로 재학습하며 모델 확률 스케일 자체가 이동해 그대로 재사용하면
-    안 되게 됐다. 첫 재산출 시 concept 정규화 통계를 `build_frames()`
-    기본값(REFUGE+ORIGA+G1020)으로 잘못 계산해 thr=0.50/0.56이라는 오염된
-    값을 냈다가(2026-07-30), train.py가 실제로 쓰는 정규화가
-    `build_frames(use_datasets=("REFUGE",))`(REFUGE+GAMMA_train만) 라는 걸
-    재확인하고 재계산 - 두 통계가 concept 스케일 차이 때문에 확률
-    median을 0.45→0.56로 바꿀 만큼 민감했다(사용자가 REFUGE train
-    위음성 이상치를 지적하며 발견, 2026-07-30). 올바른 통계로 thr을
-    0.30~0.84(0.02 간격) 재스캔: sens=1.000(FN=0)이 유지되는 마지막 지점이
-    0.60(spec=0.710) - 기존과 동일하게 "선별 목적상 위음성 최소화 우선"
-    원칙으로 하한값 채택. Youden's J(sens+spec-1) 전체 최댓값은 0.66
-    (sens=0.900/spec=0.866, J=0.766)으로 상한값 채택. 재학습마다 이 두 값도
-    함께 재산출해야 하며, 그때마다 정규화 통계가 train.py의 build_frames
-    호출 인자와 정확히 일치하는지 반드시 재확인할 것(1절 주의사항 참고)."""
+    Thresholds are recalibrated per retrain on true held-out data (currently
+    REFUGE val, n=399). Lower bound = last point keeping sens=1.0 (FN=0,
+    screening priority); upper bound = max Youden's J (sens+spec-1). Must be
+    recomputed whenever the model is retrained, and the concept normalization
+    stats used must exactly match train.py's build_frames() call args —
+    a stats mismatch previously shifted thresholds significantly."""
     if risk_prob >= THR_HIGH:
         return ("높은 위험", "hero-red",
                 "녹내장이 강하게 의심됩니다",
@@ -643,10 +609,9 @@ def _risk_grade(risk_prob):
 
 
 def _gauge_html(cls, color):
-    """등급(cls: hero-green/amber/red) 기준 고정 위치로 채운다. raw risk %를
-    그대로 막대 길이에 쓰면 캘리브레이션 안 된 확률(정상군 대부분 3~10%,
-    녹내장군 5~86%로 뭉쳐있음)이 그대로 드러나 오해를 준다 - 환자용 화면은
-    판정된 등급만 시각화(2026-07-27, 사용자 요청)."""
+    """Fill the gauge to a fixed position per grade (not raw risk %) —
+    uncalibrated probabilities cluster too tightly to be meaningful as a bar
+    length, so the patient view only visualizes the final grade."""
     pct = {"hero-green": 25, "hero-amber": 60, "hero-red": 90}.get(cls, 50)
     return (f'<div class="gauge-track"><div class="gauge-fill" '
             f'style="width:{pct}%;background:{color};"></div></div>')
@@ -664,13 +629,13 @@ DISCLAIMER = ("본 결과는 인공지능 기반 <b>선별(screening) 보조 도
 
 
 def _render_patient_view(result):
-    """환자용: 결과→의미→근거(쉬운말)→다음 행동 스토리."""
+    """Patient view: result -> meaning -> plain-language rationale -> next steps."""
     risk = result["risk_prob"]; ci = result["risk_ci"]; concept = result["concept"]
     cdr = concept.get("cdr", float("nan"))
     grade, cls, headline, detail, action = _risk_grade(risk)
     color = {"hero-green": "#2e9e6b", "hero-amber": "#e08a2b", "hero-red": "#d6483f"}[cls]
 
-    # 히어로 카드 (raw risk %는 캘리브레이션 안 돼 오해 소지가 있어 등급만 표시)
+    # Hero card (only grade shown; raw risk % is uncalibrated and misleading)
     st.markdown(
         f'<div class="hero-card {cls}">'
         f'<div class="hero-label">AI 녹내장 위험도 선별 결과</div>'
@@ -678,16 +643,16 @@ def _render_patient_view(result):
         f'<div class="hero-sub">{headline}</div></div>',
         unsafe_allow_html=True)
 
-    # 위험도 게이지(등급 기준) + 신뢰도 한 줄
+    # Risk gauge (by grade) + one-line confidence note
     st.markdown(_gauge_html(cls, color), unsafe_allow_html=True)
     conf_txt, conf_icon = _confidence_from_ci(ci)
     st.caption(f"AI 예측 신뢰도 {conf_icon} {conf_txt} "
                f"(비슷한 사진을 반복 분석했을 때 결과가 {'거의 일정' if conf_txt=='높음' else '다소 변동'}함)")
 
-    # 이게 무슨 의미인가요
+    # What does this mean
     _step("이 결과는 무슨 의미인가요?", detail)
 
-    # 왜 이런 결과가 나왔나요 (쉬운말 근거)
+    # Why this result (plain-language rationale)
     sal = result["saliency"]
     top = max(sal, key=lambda k: abs(sal[k]))
     top_label = CONCEPT_META.get(top, (top,))[0]
@@ -698,28 +663,26 @@ def _render_patient_view(result):
           f"판단했습니다. 이번 분석에서 가장 크게 영향을 준 요소는 <b>{top_label}</b>였고, {cdr_txt} "
           f"오른쪽 ‘상세 분석’ 탭에서 AI가 주목한 부위를 이미지로 확인할 수 있습니다.")
 
-    # 이제 어떻게 해야 하나요
+    # What to do next
     _step("이제 어떻게 해야 하나요?", action)
 
     st.markdown(f'<div class="disclaimer">{DISCLAIMER}</div>', unsafe_allow_html=True)
 
 
-_PLATT_A, _PLATT_B = 1.844, 0.554  # REFUGE val(n=399, 진짜 held-out) 재적합,
-                                   # 2026-07-27 pos_weight_scale=0.6 재학습 이후.
-                                   # LogisticRegression C=0.1(강한 정규화)로
-                                   # 재계산 - C 큰 값(약한 정규화)은 held-out
-                                   # 표본(양성 40개뿐)에 과적합돼 정상군 max가
-                                   # 75%까지 튀는 문제가 있었음(C=10: a=4.76).
+_PLATT_A, _PLATT_B = 1.844, 0.554  # Refit on REFUGE val (n=399, true held-out)
+                                   # with LogisticRegression C=0.1 (strong reg.) —
+                                   # weaker reg. (e.g. C=10) overfit the small
+                                   # held-out positive set (n=40), pushing
+                                   # normal-group max probability up to 75%.
 
 
 def _platt_scale(p):
-    """표시 전용 확률 재보정(Platt scaling). raw sigmoid는 정상/녹내장군 확률이
-    둘 다 좁은 대역에 몰려있어 체감상 다 낮아 보이는 문제가 있었다. temperature
-    scaling(T 하나)은 거의 효과 없어(모델이 과신이 아니라 애초에 확신이 낮은
-    상태라 스칼라로는 안 벌어짐), a·logit+b 2파라미터 Platt scaling으로 분포를
-    넓힘. **판정(threshold 0.3/0.5)에는 안 쓰고 의료진용 화면의 표시값에만
-    적용** - 실측 검증된 threshold는 raw 기준으로 유지해야 sens/spec이 21절
-    수치와 어긋나지 않는다."""
+    """Display-only probability recalibration (Platt scaling). Raw sigmoid
+    outputs cluster tightly for both classes, making everything look low.
+    Single-parameter temperature scaling barely helped (model isn't overconfident,
+    just genuinely uncertain), so 2-param Platt (a*logit+b) spreads the
+    distribution instead. Used ONLY for clinician-view display — decision
+    thresholds stay on raw probability so validated sens/spec figures stay correct."""
     eps = 1e-7
     pc = min(max(p, eps), 1 - eps)
     z = _PLATT_A * np.log(pc / (1 - pc)) + _PLATT_B
@@ -727,11 +690,11 @@ def _platt_scale(p):
 
 
 def _render_clinician_view(result):
-    """의료진용: 전문 지표·근거 자료·XAI."""
+    """Clinician view: detailed metrics, evidence, and XAI."""
     risk = result["risk_prob"]; ci = result["risk_ci"]; concept = result["concept"]
     cdr = concept.get("cdr", float("nan"))
     conf_txt, conf_icon = _confidence_from_ci(ci)
-    risk_disp = _platt_scale(risk)  # 표시용(재보정), 판정은 raw risk로
+    risk_disp = _platt_scale(risk)  # recalibrated for display; decisions use raw risk
 
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("녹내장 위험도", f"{risk_disp*100:.1f}%",
@@ -749,7 +712,7 @@ def _render_clinician_view(result):
               help="Cup-to-Disc Ratio. 통상 0.6 이상 녹내장 의심.")
     k4.metric("예측 신뢰도", f"{conf_icon} {conf_txt}")
 
-    # XAI 2열
+    # XAI, two columns
     st.markdown("###### 판단 근거 (XAI)")
     ex1, ex2 = st.columns(2)
     with ex1:
@@ -766,7 +729,7 @@ def _render_clinician_view(result):
                    "낮은 편은 아니면) 기여도가 작게(약한 색으로) 나올 수 있음 — 서로 다른 "
                    "잣대라 방향이 항상 일치하지는 않음")
 
-    # 구조 영상 2열
+    # Structural images, two columns
     st.markdown("###### 합성 OCT · 시신경 구조")
     oc1, oc2 = st.columns(2)
     oc1.image(result["oct_image"], caption="합성 OCT B-scan (512×512)",
@@ -774,7 +737,7 @@ def _render_clinician_view(result):
     oc2.image(result["seg_overlay"], caption="Disc(초록)/Cup(빨강) Segmentation",
               use_container_width=True, clamp=True)
 
-    # 개념 11종 표
+    # Table of the 11 concepts
     st.markdown("###### 시신경/망막 정량 지표 (11종)")
     rows = {"지표": [], "값": [], "정상범위": [], "판정": [], "단위": [], "설명": []}
     for c in ALL_CONCEPTS_V2:
@@ -793,8 +756,8 @@ def _render_clinician_view(result):
             elif (direction == "high" and v > hi) or (direction == "low" and v < lo):
                 verdict = "🔴 주의"
             else:
-                # 정상범위를 벗어났지만 위험 방향의 반대쪽(예: 평균보다 두꺼움)이라
-                # 위험 신호는 아님 - 정상으로 표시.
+                # Outside normal range but on the non-risk side (e.g. thicker
+                # than average) — not a risk signal, so mark as normal.
                 verdict = "🟢 정상범위"
         else:
             rows["정상범위"].append("—")
@@ -812,7 +775,7 @@ def _render_clinician_view(result):
 
 
 def _render_result(result):
-    """분석 결과를 전체 폭으로 렌더링. result가 None이면 안내만 표시."""
+    """Render the analysis result full-width; just shows a hint if result is None."""
     if result is None:
         st.info("왼쪽에서 안저사진을 업로드하고 'AI 분석 실행'을 눌러 주세요.")
         return
@@ -829,8 +792,9 @@ def _render_result(result):
         st.caption(f"👁️ 촬영 부위: **{eye_label}** (자동 판별 실패로 기본값 적용 — "
                     "왼쪽에서 직접 지정 후 재분석을 권장합니다)")
 
-    # PDF 리포트 다운로드 (같은 result에 대해 재생성 방지용 캐시)
-    # 환자 식별 정보 연동 전이라 임시로 가상 이름을 표시(TODO: 실제 업로드 폼에 이름 입력 추가).
+    # PDF report download (cached to avoid regenerating for the same result)
+    # No patient identity integration yet, so a placeholder name is used
+    # (TODO: add a real name input to the upload form).
     from report_pdf import build_report_pdf
     if st.session_state.get("_pdf_cache_id") != id(result):
         st.session_state["_pdf_bytes"] = build_report_pdf(
@@ -845,7 +809,7 @@ def _render_result(result):
         use_container_width=False,
     )
 
-    # 환자용 / 의료진용 탭 분리
+    # Separate patient-view / clinician-view tabs
     tab_p, tab_c = st.tabs(["🧑 환자용 결과", "🩺 의료진용 상세 분석"])
     with tab_p:
         _render_patient_view(result)
@@ -868,7 +832,7 @@ def main_page():
             st.session_state.clear()
             st.rerun()
 
-    # 업로드(좌) + 미리보기(우), 결과는 아래 전체 폭
+    # Upload (left) + preview (right); result renders full-width below
     up_col, prev_col = st.columns([1, 1], gap="large")
     with up_col:
         st.subheader("안저사진 업로드")

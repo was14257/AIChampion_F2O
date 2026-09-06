@@ -1,17 +1,3 @@
-"""End-to-end fundus -> predicted sketch -> OCT generation (512 resolution),
-applying the same "generate 5, pick the one with least speckle" logic used
-by the web demo (app_streamlit.py).
-
-Rationale (app_streamlit.py, around line 458): DDIM (eta=0) is deterministic,
-but the starting noise is random each time, so the speckle pattern differs
-between samples. Generate 5 and auto-pick the smoothest (least speckle) one.
-This is not a "more accurate" pick, just a "nicer-looking" one - since the
-condition is identical, the structure is the same across all 5, only the
-speckle noise differs.
-
-Output: outputs/diffusion/e2e_512_best5/{case_id}_e2e.png (all 172)
-     + outputs/diffusion/e2e_512_best5_compare.png (10-sample comparison grid)
-"""
 import random
 import sys
 import warnings
@@ -57,6 +43,7 @@ N_SAMPLES = 5  # same as app_streamlit.py
 
 
 def fundus_path(c):
+    """Resolve a case's fundus image path."""
     return gamma_fundus_path(c, GMM)
 
 
@@ -68,6 +55,14 @@ def speckle_score(im):
 
 
 def main():
+    """End-to-end fundus -> predicted sketch -> diffusion OCT generation at 512 resolution.
+
+    Rationale (app_streamlit.py, around line 458): DDIM (eta=0) is deterministic,
+    but the starting noise is random each time, so speckle pattern differs between
+    samples. Generate N_SAMPLES and auto-pick the smoothest (least speckle) one -
+    a "nicer-looking" pick, not a "more accurate" one, since the underlying
+    structure is identical across samples.
+    """
     df = pd.read_csv(FEAT, dtype={"case_id": str})
     df["case_id"] = df["case_id"].str.zfill(4)
     z = np.load(EMB, allow_pickle=True)

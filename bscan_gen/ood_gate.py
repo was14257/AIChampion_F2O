@@ -20,6 +20,7 @@ _ENC = None
 
 
 def _encoder():
+    """Lazily load and cache the RETFound encoder."""
     global _ENC
     if _ENC is None:
         _ENC = load_retfound_encoder()
@@ -27,10 +28,12 @@ def _encoder():
 
 
 def embed(im):
+    """Embed a fundus image using the cached RETFound encoder."""
     return embed_fundus(_encoder(), im)
 
 
 def build(n_pca=30, pct=99):
+    """Fit a PCA + Mahalanobis-distance out-of-distribution gate on in-distribution embeddings."""
     Xk = np.load(OUTF / "emb_whole_final.npz", allow_pickle=True)["X"]
     sc = StandardScaler().fit(Xk)
     pca = PCA(n_pca, random_state=0).fit(sc.transform(Xk))
@@ -48,6 +51,7 @@ def build(n_pca=30, pct=99):
 
 
 class Gate:
+    """Loads a saved OOD gate and scores/checks new fundus embeddings against it."""
 
     def __init__(self):
         if not GATE.exists():
@@ -56,12 +60,14 @@ class Gate:
         self.thr = float(self.z["thr"])
 
     def score(self, e):
+        """Mahalanobis distance of embedding e from the in-distribution PCA space."""
         x = (e - self.z["mean_"]) / self.z["scale_"]
         zp = (x - self.z["pca_mean"]) @ self.z["comps"].T
         d = zp - self.z["mu"]
         return float(np.sqrt(d @ self.z["icov"] @ d))
 
     def check_image(self, im):
+        """Return (is_in_distribution, distance) for a fundus image."""
         d = self.score(embed(im))
         return d <= self.thr, d
 

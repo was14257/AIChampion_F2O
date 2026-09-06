@@ -32,6 +32,7 @@ def ddim_sample(m, conds, steps=250, spec=None):
 
 
 def main(spec=None):
+    """Generate diffusion B-scans for all hand-labeled cases and save a comparison grid."""
     spec = spec or D.default_spec()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     m = D.load_unet(spec, dev)
@@ -44,6 +45,7 @@ def main(spec=None):
     ids = [f.stem for f in files]
 
     def cond_of(f):
+        """Build the condition map for one npz label file, flattening if the spec requires it."""
         d = np.load(f)
         ilm, rpe = d["ilm"], d["rpe"]
         if spec.flatten:

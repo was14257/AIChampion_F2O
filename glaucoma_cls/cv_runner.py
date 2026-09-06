@@ -1,19 +1,3 @@
-"""5-fold CV + ethnicity/domain ablation.
-
-Splits GAMMA_train's 100 images (all Chinese, Sun Yat-sen) 80/20 with 5
-different seeds to see val AUC's mean/std (checking whether the prior
-single run's AUC=0.960 with n=20 was a lucky split).
-
-Also ablates along two axes at once:
-  - include_gamma_train: whether to mix the 80 GAMMA images into training
-  - use_datasets: external training data composition
-      all      = REFUGE(Chinese) + ORIGA(Malay) + G1020(German/European)
-      asian    = REFUGE(Chinese) + ORIGA(Malay)  - excludes G1020(non-Asian)
-
-Total 4 combos x 5 folds = 20 runs. Each run is kept short (10 epochs) to
-reduce sweep cost (in the prior experiment, unfreezing the last 4 blocks
-already hit best around epoch 10).
-"""
 import json
 import random
 import time
@@ -129,12 +113,15 @@ EXT_VAL_CONDITIONS = [
 
 
 def set_seed(s):
+    """Seeds all RNGs (python/numpy/torch) for reproducibility."""
     random.seed(s); np.random.seed(s)
     torch.manual_seed(s); torch.cuda.manual_seed_all(s)
 
 
 @torch.no_grad()
 def evaluate(model, loader, device, use_concepts=False):
+    """Runs the model over a loader and returns AUC/acc/macro-F1 (at 0.5 and
+    at the Youden's J optimal threshold) plus sensitivity/specificity."""
     model.eval()
     probs, labels = [], []
     for batch in loader:
@@ -175,6 +162,8 @@ def evaluate(model, loader, device, use_concepts=False):
 def run_one(seed, use_datasets, include_gamma_train, unfreeze_last_n, device,
             use_concepts=False, pos_weight_scale=1.0, fold_idx=None, n_folds=5,
             concept_proj_dim=0, ext_val_frac=0.0):
+    """Trains one GlaucomaNet run for a given condition/seed/fold and returns
+    best/final metrics on the val split."""
     set_seed(seed)
     ext, val, _ = build_frames(gamma_val_frac=0.2, seed=seed,
                                include_gamma_train=include_gamma_train,
@@ -225,6 +214,8 @@ def run_one(seed, use_datasets, include_gamma_train, unfreeze_last_n, device,
 
 
 def _run_sweep(conditions, out_name, use_concepts_key=None):
+    """Runs run_one() over all (condition, seed) combos, prints per-run and
+    per-condition summaries, and saves raw results as JSON to OUT/out_name."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     results = []
     for cond in conditions:
@@ -309,38 +300,47 @@ def _run_true_kfold(conditions, out_name, n_folds=5, seed=0):
 
 
 def main_true_kfold():
+    """Entry point: re-validate the best config with true non-overlapping k-fold."""
     _run_true_kfold(BEST_CONFIG_RECHECK, "cv_results_true_kfold.json")
 
 
 def main_concept_proj():
+    """Entry point: sweep concept_proj_dim under true k-fold."""
     _run_true_kfold(CONCEPT_PROJ_CONDITIONS, "cv_results_concept_proj.json")
 
 
 def main_ext_val():
+    """Entry point: sweep ext_val_frac under true k-fold."""
     _run_true_kfold(EXT_VAL_CONDITIONS, "cv_results_ext_val.json")
 
 
 def main():
+    """Entry point: the base ethnicity/domain ablation sweep."""
     _run_sweep(CONDITIONS, "cv_results.json")
 
 
 def main_concept():
+    """Entry point: with vs. without concept features."""
     _run_sweep(CONCEPT_CONDITIONS, "cv_results_concept.json")
 
 
 def main_concept_unfreeze():
+    """Entry point: sweep unfreeze width with concepts fixed on."""
     _run_sweep(CONCEPT_UNFREEZE_CONDITIONS, "cv_results_concept_unfreeze.json")
 
 
 def main_pos_weight():
+    """Entry point: sweep pos_weight_scale."""
     _run_sweep(POS_WEIGHT_CONDITIONS, "cv_results_pos_weight.json")
 
 
 def main_pos_weight_v2():
+    """Entry point: finer pos_weight_scale sweep."""
     _run_sweep(POS_WEIGHT_CONDITIONS_V2, "cv_results_pos_weight_v2.json")
 
 
 def main_best_recheck():
+    """Entry point: re-validate the best config (non-true-kfold sweep path)."""
     _run_sweep(BEST_CONFIG_RECHECK, "cv_results_best_recheck.json")
 
 

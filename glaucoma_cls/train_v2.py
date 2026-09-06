@@ -1,13 +1,3 @@
-"""v2 classifier: concept 9개(SEG6+OCT_CONCEPTS3, GAMMA 172장 학습) 대신
-concept 11개(SEG6+RNFL5, GRAPE 244장 실측 학습)를 쓰고, 데이터도
-GAMMA_train+REFUGE+GRAPE 전체를 하나의 pool로 묶어 glaucoma 비율을 유지한
-stratified 5-fold CV로 학습/평가한다 (2026-08-09, 사용자 요청).
-
-기존 train.py(GAMMA_train만 val, leakage 방지 원칙)와 달리 val도 전체 pool
-에서 stratified로 뽑는다 - GRAPE를 훈련에만 넣었을 때 specificity가
-0.11~0.50까지 급락하던 문제가, concept을 11개로 늘리고 평가를 pool 전체
-stratified로 바꾸자 spec 0.85~0.90으로 회복됨을 확인(temp/grape_posweight_sweep.py,
-temp/grape_cls_with_concept.py 대비)."""
 import json
 import random
 import time
@@ -37,12 +27,15 @@ SEED = 42
 
 
 def set_seed(s):
+    """Seeds all RNGs (python/numpy/torch) for reproducibility."""
     random.seed(s); np.random.seed(s)
     torch.manual_seed(s); torch.cuda.manual_seed_all(s)
 
 
 @torch.no_grad()
 def evaluate(model, loader, device, return_probs=False):
+    """Runs the model over a loader and returns AUC/acc/macro-F1 (at 0.5 and
+    at the Youden's J optimal threshold) plus sensitivity/specificity."""
     model.eval()
     probs, labels = [], []
     for x, c, y in loader:
@@ -73,6 +66,7 @@ def evaluate(model, loader, device, return_probs=False):
 
 
 def run_fold(fold_idx, train_df, val_df, concept_table, n_concepts, device):
+    """Trains and evaluates GlaucomaNet for one CV fold; returns metrics (with OOF probs) and the trained model."""
     set_seed(SEED + fold_idx)
     train_df, val_df = attach_concepts(train_df, val_df, concept_table, n_concepts)
     model = GlaucomaNet(freeze_encoder=True, unfreeze_last_n=UNFREEZE_LAST_N,
@@ -108,6 +102,8 @@ def run_fold(fold_idx, train_df, val_df, concept_table, n_concepts, device):
 
 
 def main():
+    """Runs stratified 5-fold CV over the GAMMA+REFUGE+GRAPE pool, saves per-fold
+    results, out-of-fold predictions, and the best-fold model checkpoint."""
     pool = build_pool_v2(seed=SEED)
     print(f"pool total={len(pool)}  by dataset={pool['dataset'].value_counts().to_dict()}  "
           f"glaucoma_ratio={pool['label'].mean():.3f}")

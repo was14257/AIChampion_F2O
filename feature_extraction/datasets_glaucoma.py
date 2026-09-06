@@ -1,14 +1,3 @@
-"""Collects a list of fundus images with binary glaucoma labels for training
-the risk head (Step 2).
-
-Builds (image_path, label) pairs from three datasets: G1020 / ORIGA /
-GAMMA(grading). GRAPE is excluded this round - CFPs have multiple images per
-eye (camera/timepoint), requiring separate patient-to-label mapping work, so
-it's deferred.
-Only REFUGE and ORIGA have disc/cup masks, so concept ground-truth training
-(Step1) uses only those two; this list is used only for risk head training
-(Step2, where concept is filled with predicted values).
-"""
 import sys
 from pathlib import Path
 
@@ -19,12 +8,14 @@ from config import CFG
 
 
 def refuge_pairs() -> list[tuple[str, int]]:
+    """Build (path, label) pairs from REFUGE train images (label from filename prefix 'g')."""
     d = CFG.paths.data_root / "REFUGE/train/Images"
     return [(str(p), 1 if p.stem.lower().startswith("g") else 0)
             for p in sorted(d.glob("*.jpg"))]
 
 
 def g1020_pairs() -> list[tuple[str, int]]:
+    """Build (path, label) pairs from the G1020 dataset's CSV."""
     root = CFG.paths.g1020
     df = pd.read_csv(root / "G1020.csv")
     return [(str(root / "Images" / row.imageID), int(row.binaryLabels))
@@ -32,6 +23,7 @@ def g1020_pairs() -> list[tuple[str, int]]:
 
 
 def origa_pairs() -> list[tuple[str, int]]:
+    """Build (path, label) pairs from the ORIGA dataset's CSV."""
     root = CFG.paths.origa
     df = pd.read_csv(root / "OrigaList.csv")
     return [(str(root / "Images" / row.Filename), int(row.Glaucoma))
@@ -39,6 +31,7 @@ def origa_pairs() -> list[tuple[str, int]]:
 
 
 def gamma_pairs() -> list[tuple[str, int]]:
+    """Build (path, label) pairs from the GAMMA grading dataset (training + testing GT sheets)."""
     from bscan_gen.utils import gamma_fundus_path
     root = CFG.paths.gamma_grading
     rows = []
@@ -56,6 +49,7 @@ def gamma_pairs() -> list[tuple[str, int]]:
 
 
 def all_pairs() -> list[tuple[str, int]]:
+    """Combine pairs from REFUGE, G1020, ORIGA, and GAMMA for risk-head training."""
     pairs = refuge_pairs() + g1020_pairs() + origa_pairs() + gamma_pairs()
     print(f"REFUGE={len(refuge_pairs())}  G1020={len(g1020_pairs())}  "
           f"ORIGA={len(origa_pairs())}  GAMMA={len(gamma_pairs())}  total={len(pairs)}")

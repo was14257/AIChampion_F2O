@@ -42,6 +42,7 @@ CKPT = OUT / "best.pth"
 
 
 def set_seed(s=42):
+    """Seeds all RNGs (python/numpy/torch) for reproducibility."""
     random.seed(s)
     np.random.seed(s)
     torch.manual_seed(s)
@@ -50,6 +51,7 @@ def set_seed(s=42):
 
 @torch.no_grad()
 def evaluate(model, loader, device, use_concepts=False):
+    """Runs the model over a loader and returns AUC/acc/macro-F1/sens/spec (at threshold 0.5) plus raw probs."""
     model.eval()
     probs, labels = [], []
     for batch in loader:
@@ -78,6 +80,8 @@ def evaluate(model, loader, device, use_concepts=False):
 
 
 def main():
+    """Trains (unless CLS_PREDICT_ONLY) GlaucomaNet, picks the best checkpoint by
+    (AUC, macro_f1), calibrates a threshold on GAMMA val, and writes GAMMA test pseudo-labels."""
     set_seed()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     OUT.mkdir(parents=True, exist_ok=True)

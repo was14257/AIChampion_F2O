@@ -9,6 +9,7 @@ IMG_SIZE = 224
 
 
 def _load_encoder():
+    """Builds the ViT-L encoder and loads pretrained RETFound weights (strict=False)."""
     enc = timm.create_model("vit_large_patch16_224", pretrained=False,
                             num_classes=0, img_size=IMG_SIZE)
     if not RETFOUND_W.exists():
@@ -34,6 +35,7 @@ def _load_encoder():
 
 
 class GlaucomaNet(nn.Module):
+    """RETFound ViT encoder + optional concept features -> binary glaucoma risk logit."""
 
     def __init__(self, freeze_encoder=False, unfreeze_last_n=0, n_concepts=0,
                 concept_proj_dim=0):
@@ -88,6 +90,7 @@ class GlaucomaNet(nn.Module):
                     p.requires_grad_(True)
 
     def forward(self, x, concepts=None):
+        """Encodes image x (and concepts, if used) into a risk logit."""
         feat = self.encoder.forward_features(x)[:, 0]
         feat = self.feat_norm(feat)
         feat = self.feat_dropout(feat)   # dropout applied only to the RETFound embedding
@@ -97,6 +100,7 @@ class GlaucomaNet(nn.Module):
         return self.head(feat).squeeze(1)
 
     def param_groups(self, lr_enc, lr_head):
+        """Splits trainable params into encoder/head groups with separate learning rates."""
         enc_params = [p for p in self.encoder.parameters() if p.requires_grad]
         head_params = list(self.feat_norm.parameters()) + list(self.head.parameters())
         if self.concept_proj is not None:

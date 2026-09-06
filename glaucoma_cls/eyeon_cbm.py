@@ -1,24 +1,3 @@
-"""EYEON concept extractor: extracts 9 concepts using 2 independent RETFound encoders.
-
-Originally EyeonCBM from cbm/model.py with the risk_head
-(ConceptBottleneckRiskHead)/CQR/calibration parts stripped out entirely. The
-actual server (app_streamlit.py) computes risk via glaucoma_cls.GlaucomaNet,
-and this class only extracts the 9 concepts (risk_head/concept_stats/
-cqr_correction used to exist here but were dead code referenced nowhere).
-
-The seg encoder (512 input, trained under retfound_seg) and the
-OCT-regression encoder (224 input, trained under bscan_gen) have different
-img_size and are separate models with separate weights from the start, so
-they can't be shared (merging into one would require retraining seg at 224
-with a risk of dropping Dice, so we keep the two validated weight sets
-as-is).
-
-3 forward passes:
-  1) whole fundus -> seg encoder(512) -> disc/cup mask -> 6 concepts (CDR/ovality etc.)
-  2) whole fundus -> oct encoder(224) -> whole embedding
-  3) disc crop     -> oct encoder(224) -> disc embedding
-     -> whole+disc concat -> oct_linear -> 3 concepts (mean_th/ilm_rough/fovea_curv)
-"""
 import numpy as np
 import torch
 import torch.nn as nn
@@ -46,6 +25,7 @@ class EyeonCBM(nn.Module):
     def __init__(self, seg_model: RetFoundSegmenter, oct_encoder: nn.Module,
                  oct_linear: nn.Linear, disc_x_fallback_ratio: float = 0.5,
                  rnfl_model: dict | None = None):
+        """Stores the seg/oct sub-models and precomputes the RNFL output index order."""
         super().__init__()
         self.seg_model = seg_model
         self.oct_encoder = oct_encoder
@@ -58,6 +38,7 @@ class EyeonCBM(nn.Module):
                                     targets.index("S"), targets.index("N"), targets.index("T")]
 
     def _disc_x_from_mask(self, label_map: np.ndarray, img_w: int) -> int:
+        """Finds the disc's horizontal center in original-image pixel coords (fallback if no disc found)."""
         disc = label_map >= 1
         if disc.sum() == 0:
             return int(img_w * self.disc_x_fallback_ratio)
@@ -96,6 +77,7 @@ class EyeonCBM(nn.Module):
 
 
 def _preprocess_from_image(img: Image.Image, device):
+    """Resizes/normalizes a PIL image into the seg model's input tensor."""
     from config import CFG
     size = CFG.data.img_size
     arr = np.asarray(img.resize((size, size), Image.BILINEAR), dtype=np.float32) / 255.0

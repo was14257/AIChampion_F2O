@@ -25,6 +25,7 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 
 def _band(th, x0, x1):
+    """Average thickness over a horizontal band [x0, x1] (fraction of width)."""
     W = len(th)
     a, b = int(x0 * W), int(x1 * W)
     seg = th[a:max(a + 1, b)]
@@ -32,6 +33,7 @@ def _band(th, x0, x1):
 
 
 def case_features(ilm, rpe, laterality):
+    """Compute a dict of retinal thickness/shape features for one case from its ILM/RPE lines."""
     th = rpe - ilm
     W = len(th)
     c = W // 2
@@ -95,6 +97,7 @@ def case_features(ilm, rpe, laterality):
 
 
 def load_labels():
+    """Load laterality (OD/OS) and glaucoma ground-truth labels per case id."""
     lat = pd.read_csv(LAT, encoding="utf-8-sig")
     lat["case_id"] = lat["case_id"].astype(str).str.zfill(4)
     lat = lat.set_index("case_id")["laterality"].to_dict()
@@ -107,6 +110,7 @@ def load_labels():
 
 
 def main():
+    """Extract per-case features, save them with a stats report, and plot the top discriminative features."""
     OUT.mkdir(parents=True, exist_ok=True)
     lat, lab = load_labels()
     rows = []

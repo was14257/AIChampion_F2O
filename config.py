@@ -23,11 +23,14 @@ class PathConfig:
     refuge: Path = _lc.REFUGE_ROOT
     gamma: Path = _lc.GAMMA_ROOT
     gamma_grading: Path = _lc.GAMMA_GRADING_ROOT
+    justraigs: Path = _lc.JUSTRAIGS_ROOT
+    justraigs_labels_csv: Path = _lc.JUSTRAIGS_LABELS_CSV
 
     oct_labels: Path = _lc.OCT_LABELS_ROOT
     oct_pseudo: Path = _lc.OCT_PSEUDO_ROOT
     oct_features: Path = _lc.OCT_FEATURES_ROOT
     diffusion_out: Path = _lc.DIFFUSION_OUT_ROOT
+    age_gen_out: Path = _lc.AGE_GEN_OUT_ROOT
 
     refuge_train_img: Path = field(init=False)
     refuge_train_mask: Path = field(init=False)
@@ -181,6 +184,47 @@ class OctTier1Config:
 
 
 @dataclass(frozen=True)
+class AgeGenConfig:
+    age_min: int = _lc.AGE_MIN
+    age_max: int = _lc.AGE_MAX
+    match_fail_max: float = _lc.AGE_MATCH_FAIL_MAX
+
+    split_seed: int = _lc.AGE_SPLIT_SEED
+    split_fracs: tuple[float, float, float] = _lc.AGE_SPLIT_FRACS
+
+    embed_bs: int = _lc.AGE_EMBED_BS
+    embed_workers: int = _lc.AGE_EMBED_WORKERS
+    embed_chunk: int = _lc.AGE_EMBED_CHUNK
+    use_disc_crop: bool = _lc.AGE_USE_DISC_CROP
+
+    pls_grid: tuple[int, ...] = _lc.AGE_PLS_GRID
+
+    mlp_hidden: int = _lc.AGE_MLP_HIDDEN
+    mlp_epochs: int = _lc.AGE_MLP_EPOCHS
+    mlp_bs: int = _lc.AGE_MLP_BS
+    mlp_lr: float = _lc.AGE_MLP_LR
+    mlp_wd: float = _lc.AGE_MLP_WD
+    mlp_patience: int = _lc.AGE_MLP_PATIENCE
+
+    go_mae: float = _lc.AGE_GO_MAE
+    conditional_mae: float = _lc.AGE_CONDITIONAL_MAE
+    min_r2: float = _lc.AGE_MIN_R2
+
+    diff_res: int = _lc.AGE_DIFF_RES
+    diff_t: int = _lc.AGE_DIFF_T
+    diff_ch: int = _lc.AGE_DIFF_CH
+    diff_epochs_pretrain: int = _lc.AGE_DIFF_EPOCHS_PRETRAIN
+    diff_epochs_finetune: int = _lc.AGE_DIFF_EPOCHS_FINETUNE
+    diff_bs_pretrain: int = _lc.AGE_DIFF_BS_PRETRAIN
+    diff_bs_finetune: int = _lc.AGE_DIFF_BS_FINETUNE
+    diff_lr: float = _lc.AGE_DIFF_LR
+    diff_finetune_lr: float = _lc.AGE_DIFF_FINETUNE_LR
+    diff_sample_n: int = _lc.AGE_DIFF_SAMPLE_N
+    diff_ddim_steps: int = _lc.AGE_DIFF_DDIM_STEPS
+    diff_age_norm: float = _lc.AGE_DIFF_AGE_NORM
+
+
+@dataclass(frozen=True)
 class Config:
     paths: PathConfig = field(default_factory=PathConfig)
     data: DataConfig = field(default_factory=DataConfig)
@@ -189,6 +233,7 @@ class Config:
     infer: InferConfig = field(default_factory=InferConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     oct_tier1: OctTier1Config = field(default_factory=OctTier1Config)
+    age_gen: AgeGenConfig = field(default_factory=AgeGenConfig)
 
 
 CFG = Config()

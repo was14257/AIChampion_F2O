@@ -1,22 +1,3 @@
-"""Two explainability paths for the GlaucomaNet (RETFound embedding + 9
-concepts) classifier.
-
-Neither is involved in computing risk; they show "why this decision came
-out" in two different ways (both are post-hoc methods needing no training):
-
-  1) concept_saliency(): of the 9 concepts (cdr, ovality, thickness, etc.),
-     how much each contributed to this case's risk (gradient*input). Even
-     after passing through concept_proj (an MLP), gradient still flows back
-     to the raw concept via the chain rule, so we set requires_grad on the
-     standardized concept input to capture it. -> "numeric evidence"
-  2) ViTGradCAM: a heatmap of where RETFound (ViT) looked in the fundus.
-     patch token gradient*activation w.r.t. the risk logit. -> "spatial
-     evidence"
-
-Both paths attach to the single GlaucomaNet. Since forward takes the form
-model(x, concepts), both Grad-CAM and saliency feed in x and concept
-together to reproduce the actual risk logit.
-"""
 import numpy as np
 import torch
 import torch.nn as nn
@@ -97,6 +78,7 @@ class ViTGradCAM:
     """
 
     def __init__(self, model, block_idx: int = -2):
+        """Registers forward/backward hooks on the target ViT block."""
         self.model = model
         self.block = model.encoder.blocks[block_idx]
         self._activations = None
@@ -105,12 +87,15 @@ class ViTGradCAM:
         self._bh = self.block.register_full_backward_hook(self._save_gradient)
 
     def _save_activation(self, module, inp, out):
+        """Forward hook: caches the block's output activations."""
         self._activations = out          # (B, 1+N, D) - CLS + patch tokens
 
     def _save_gradient(self, module, grad_in, grad_out):
+        """Backward hook: caches the gradient w.r.t. the block's output."""
         self._gradients = grad_out[0]
 
     def remove(self):
+        """Unregisters the forward/backward hooks."""
         self._fh.remove()
         self._bh.remove()
 
@@ -179,6 +164,7 @@ def attention_rollout(model, x: torch.Tensor, concepts: torch.Tensor,
     handles = []
 
     def _hook(attn_module):
+        """Builds a forward hook that recomputes and stores this block's attention weights."""
         def fn(module, inp, out):
             # Recompute attention from the qkv Linear's output
             xin = inp[0]                      # (B, N, C)

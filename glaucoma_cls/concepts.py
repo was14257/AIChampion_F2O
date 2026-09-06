@@ -1,15 +1,3 @@
-"""Concept extraction: disc/cup mask geometric concepts (6) + fundus
-embedding->OCT concepts (3).
-
-Originally merged from cbm/concepts.py + cbm/oct_head.py.
-- seg_concepts(): disc/cup segmentation mask -> 6 concepts (cdr/ovality/area etc.)
-- fit_oct_linear(): whole+disc embedding -> linear regression for
-  [mean_th, ilm_rough, fovea_curv]
-  (called only from the training script scripts/fit_oct_linear.py; the
-  server only loads oct_linear.pt)
-
-SEG_CONCEPTS(6) + OCT_CONCEPTS(3) = ALL_CONCEPTS(9), fixed order.
-"""
 import cv2
 import numpy as np
 import torch
@@ -99,6 +87,7 @@ def _ovality(binary: np.ndarray) -> float:
 
 
 def _horizontal_diameter(binary: np.ndarray) -> float:
+    """Max row-wise width (in pixels) of the binary mask."""
     if binary.sum() == 0:
         return 0.0
     row_widths = binary.sum(axis=1)
@@ -106,6 +95,7 @@ def _horizontal_diameter(binary: np.ndarray) -> float:
 
 
 def _horizontal_cdr(disc: np.ndarray, cup: np.ndarray) -> float:
+    """Horizontal cup/disc diameter ratio."""
     d = _horizontal_diameter(disc)
     if d == 0:
         return float("nan")
@@ -113,7 +103,9 @@ def _horizontal_cdr(disc: np.ndarray, cup: np.ndarray) -> float:
 
 
 def seg_concepts(label_map: np.ndarray, cdr_kind: str = "vertical") -> dict:
-    """label_map: an (H,W) integer array from postprocess_label() (0=bg,1=disc/rim,2=cup)."""
+    """Computes the 6 geometric concepts (cdr, ovality, area, etc.) from a
+    disc/cup segmentation label_map: an (H,W) integer array from
+    postprocess_label() (0=bg,1=disc/rim,2=cup)."""
     disc, cup = masks_from_label(label_map)
     disc_area = float(disc.sum())
     cup_area = float(cup.sum())

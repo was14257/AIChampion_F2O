@@ -15,6 +15,7 @@ MM = "grading/Glaucoma_grading/{split}/multi-modality_images"
 
 
 def list_cases(root: Path):
+    # find GAMMA cases that have both a fundus image and an OCT volume folder
     pairs = []
     for split in ("training", "testing"):
         mm_dir = root / MM.format(split=split)
@@ -32,6 +33,7 @@ def list_cases(root: Path):
 
 
 def central_bscan(volume_dir: Path, center: int = 128) -> Path | None:
+    # return the B-scan closest to the given slice index, falling back to the volume's middle slice
     p = volume_dir / f"{center}_image.jpg"
     if p.exists():
         return p
@@ -41,6 +43,7 @@ def central_bscan(volume_dir: Path, center: int = 128) -> Path | None:
 
 
 def main():
+    # save a quick side-by-side preview of fundus vs central B-scan for a few GAMMA cases
     print(f"GAMMA_ROOT = {GAMMA_ROOT}")
     cases = list_cases(GAMMA_ROOT)
     print(f"Paired cases: {len(cases)}")
@@ -69,7 +72,9 @@ def main():
         axes[i, 1].axis("off")
 
     plt.tight_layout()
-    out = Path("gamma_pair_preview.png")
+    out_dir = Path("results")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / "gamma_pair_preview.png"
     plt.savefig(out, dpi=90)
     print(f"Preview saved: {out.resolve()}")
 

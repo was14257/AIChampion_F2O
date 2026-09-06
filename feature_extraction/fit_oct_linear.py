@@ -1,11 +1,3 @@
-"""Step 1b: does a final PLS fit on all 172 hand-labeled GAMMA images and
-converts/saves it as an nn.Linear.
-
-bscan_gen/stageA_improve.py only "measures" skill via K-fold CV and doesn't
-save final fixed coefficients. Here we fit once more on the full GAMMA data
-using the same approach (whole+disc embedding, PLS 8 components) to produce
-usable coefficients.
-"""
 import sys
 from pathlib import Path
 
@@ -26,6 +18,7 @@ GMM = CFG.paths.gamma_grading
 
 
 def main():
+    """Fit a final PLS model on all hand-labeled GAMMA images and save it as an nn.Linear."""
     feats = pd.read_csv(OUT / "features.csv", dtype={"case_id": str})
     feats["case_id"] = feats["case_id"].str.zfill(4)
     feats = feats.set_index("case_id")

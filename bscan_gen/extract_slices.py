@@ -12,6 +12,7 @@ ROOT = CFG.paths.gamma_grading
 
 
 def extract_case(mhd_path: Path, out_dir: Path, overwrite=False):
+    """Extract all B-scan slices from an .mhd volume and save each as a jpg."""
     vol = sitk.GetArrayFromImage(sitk.ReadImage(str(mhd_path)))  # (Z, H, W) uint8
     out_dir.mkdir(parents=True, exist_ok=True)
     for si in range(vol.shape[0]):
@@ -22,6 +23,7 @@ def extract_case(mhd_path: Path, out_dir: Path, overwrite=False):
 
 
 def main():
+    """Extract slices for every case in training/testing that hasn't been extracted yet."""
     n_cases = 0
     n_slices = 0
     for split in ("training", "testing"):

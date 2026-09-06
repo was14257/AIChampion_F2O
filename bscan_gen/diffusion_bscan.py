@@ -64,6 +64,7 @@ def spec_512() -> DiffusionSpec:
 
 
 def load_pair(cid, si, ilm, rpe):
+    """Load a B-scan image (resized) and its ILM/RPE lines, optionally flattening both together."""
     img = np.asarray(Image.open(slice_path(cid, si)).convert("L").resize((W, H)), np.float32)
     if FLATTEN:
         shift = flatten_shift(rpe)
@@ -75,18 +76,22 @@ def load_pair(cid, si, ilm, rpe):
 
 
 def slice_path(cid, si):
+    """Resolve a slice's image path under the gamma grading dataset root."""
     return gamma_slice_path(cid, si, GMM)
 
 
 def qc_ok(d):
+    """Quality-check wrapper bound to the default thresholds."""
     return _qc_ok(d)
 
 
 def build_cond(ilm, rpe):
+    """Build the condition map at this module's default resolution (H, W)."""
     return _build_cond(ilm, rpe, H, W, HORIG)
 
 
 class DS(torch.utils.data.Dataset):
+    """Dataset of (B-scan image, condition map) pairs for training the diffusion model."""
 
     def __init__(self, files):
         self.files = files
@@ -105,6 +110,7 @@ class DS(torch.utils.data.Dataset):
 
 
 def tpe(t, dim):
+    """Sinusoidal timestep positional embedding."""
     half = dim // 2
     freq = torch.exp(-math.log(10000) * torch.arange(half, device=t.device) / half)
     a = t[:, None].float() * freq[None]
@@ -112,6 +118,7 @@ def tpe(t, dim):
 
 
 class Res(nn.Module):
+    """Residual conv block conditioned on the timestep embedding."""
 
     def __init__(self, ci, co, td):
         super().__init__()
@@ -123,6 +130,7 @@ class Res(nn.Module):
         self.sk = nn.Conv2d(ci, co, 1) if ci != co else nn.Identity()
 
     def forward(self, x, t):
+        """Apply the residual block: conv -> add time embedding -> conv -> skip connection."""
         h = self.c1(F.silu(self.n1(x)))
         h = h + self.emb(t)[:, :, None, None]
         h = self.c2(F.silu(self.n2(h)))
@@ -130,6 +138,7 @@ class Res(nn.Module):
 
 
 class UNet(nn.Module):
+    """Conditional U-Net that predicts noise given a noised image, condition map, and timestep."""
 
     def __init__(self, ch=64, td=256):
         super().__init__()
@@ -149,6 +158,7 @@ class UNet(nn.Module):
         self.out = nn.Sequential(nn.GroupNorm(8, ch), nn.SiLU(), nn.Conv2d(ch, 1, 3, padding=1))
 
     def forward(self, x, cond, t):
+        """Encoder-decoder forward pass with skip connections, conditioned on cond and t."""
         te = self.tmlp(tpe(t, self.td))
         h = self.inc(torch.cat([x, cond], 1))
         e1 = self.d1(h, te)
@@ -168,6 +178,7 @@ class UNet(nn.Module):
 
 
 def make_sched(dev, t_steps=None):
+    """Build the linear beta noise schedule and its cumulative alpha products."""
     b = torch.linspace(1e-4, 0.02, t_steps or T, device=dev)
     a = 1 - b
     ac = torch.cumprod(a, 0)
@@ -223,6 +234,7 @@ def build_cond_for(ilm, rpe, spec):
 
 
 def train():
+    """Train the diffusion UNet, periodically checkpointing and sampling."""
     epochs = CFG.oct_tier1.diff_epochs
     bs = CFG.oct_tier1.diff_bs
     OUT.mkdir(parents=True, exist_ok=True)
@@ -282,6 +294,7 @@ def train():
 
 @torch.no_grad()
 def sample(n=None, ep="final", m=None, files=None):
+    """Run full DDPM ancestral sampling on n cases and save a condition/generated/real comparison figure."""
     n = n or CFG.oct_tier1.diff_sample_n
     dev = "cuda" if torch.cuda.is_available() else "cpu"
 

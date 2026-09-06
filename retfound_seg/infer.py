@@ -16,6 +16,7 @@ _PALETTE = np.array([[0, 0, 0], [0, 170, 0], [220, 0, 0]], dtype=np.uint8)
 
 
 def load_model(device):
+    """Load the trained segmentation model checkpoint for inference."""
     ckpt_path = CFG.infer.checkpoint_path
     if not ckpt_path.exists():
         raise FileNotFoundError(
@@ -29,6 +30,7 @@ def load_model(device):
 
 
 def _preprocess(img_path: Path, device):
+    """Load an image file and prepare it as a normalized model input tensor."""
     size = CFG.data.img_size
     img = Image.open(img_path).convert("RGB").resize((size, size), Image.BILINEAR)
     arr = np.asarray(img, dtype=np.float32) / 255.0
@@ -41,16 +43,19 @@ def _preprocess(img_path: Path, device):
 
 @torch.no_grad()
 def predict_label(model, img_tensor) -> np.ndarray:
+    """Run the model and return a post-processed label map."""
     logits = model(img_tensor)
     pred = logits.argmax(dim=1)[0].cpu().numpy().astype(np.int64)
     return postprocess_label(pred)
 
 
 def save_overlay(label_map: np.ndarray, out_path: Path):
+    """Save a label map as a color-palette image."""
     Image.fromarray(_PALETTE[label_map]).save(out_path)
 
 
 def _dice(a: np.ndarray, b: np.ndarray) -> float:
+    """Dice coefficient between two binary masks."""
     a, b = a.astype(bool), b.astype(bool)
     denom = a.sum() + b.sum()
     if denom == 0:
@@ -59,12 +64,14 @@ def _dice(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _boundary(binary: np.ndarray, thickness: int = 3) -> np.ndarray:
+    """Return the outline pixels of a binary mask via erosion."""
     eroded = ndimage.binary_erosion(binary, iterations=max(1, thickness))
     return binary & ~eroded
 
 
 def save_contour_overlay(img_path: Path, label_map: np.ndarray, out_path: Path,
                          thickness: int = 3):
+    """Draw disc/cup contours on top of the original image and save it."""
     orig = Image.open(img_path).convert("RGB")
     W, H = orig.size
     rgb = np.asarray(orig).copy()
@@ -83,6 +90,7 @@ def save_contour_overlay(img_path: Path, label_map: np.ndarray, out_path: Path,
 
 
 def run_single(image: str):
+    """Run inference on a single image and print/save the CDR result."""
     device = torch.device(CFG.runtime.device)
     model = load_model(device)
     img_path = Path(image)
@@ -97,6 +105,7 @@ def run_single(image: str):
 
 
 def run_split(split: str, save_vis: bool = False):
+    """Run inference over a full dataset split, saving a CDR/dice CSV summary."""
     device = torch.device(CFG.runtime.device)
     model = load_model(device)
     loader = build_loader(split, batch_size=1, shuffle=False)
@@ -161,6 +170,7 @@ def run_split(split: str, save_vis: bool = False):
 
 
 def main():
+    """Entry point: run single-image or full-split inference based on config."""
     if INFER_MODE == "image":
         run_single(INFER_IMAGE)
     else:

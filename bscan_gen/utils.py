@@ -14,6 +14,7 @@ _RETFOUND_TF = None
 
 
 def gamma_slice_path(cid: str, si, root: Path | None = None):
+    """Find the on-disk path of one B-scan slice image for a given case/slice id."""
     root = root or CFG.paths.gamma_grading
     for s in ("training", "testing"):
         p = Path(root) / f"{s}/multi-modality_images/{cid}/{cid}/{si}_image.jpg"
@@ -23,6 +24,7 @@ def gamma_slice_path(cid: str, si, root: Path | None = None):
 
 
 def gamma_fundus_path(cid: str, root: Path | None = None):
+    """Find the on-disk path of a case's fundus photo."""
     root = root or CFG.paths.gamma_grading
     for s in ("training", "testing"):
         p = Path(root) / f"{s}/multi-modality_images/{cid}/{cid}.jpg"
@@ -32,7 +34,7 @@ def gamma_fundus_path(cid: str, root: Path | None = None):
 
 
 def pick_per_volume(files, n_per_vol):
-    """볼륨(cid)별로 균등 간격 슬라이스 n_per_vol개만 골라 인접 중복을 줄인다."""
+    """Pick n_per_vol evenly-spaced slices per volume (cid) to reduce redundancy from adjacent slices."""
     if not n_per_vol:
         return files
     groups = {}
@@ -51,6 +53,7 @@ def pick_per_volume(files, n_per_vol):
 
 
 def qc_ok(d, thickness_range=(40, 220), max_jump=40) -> bool:
+    """Quality check: retinal thickness must be in range and layer lines must not jump too much."""
     th = np.median(d["rpe"] - d["ilm"])
     jump = max(np.max(np.abs(np.diff(d["ilm"]))), np.max(np.abs(np.diff(d["rpe"]))))
     lo, hi = thickness_range
@@ -58,12 +61,14 @@ def qc_ok(d, thickness_range=(40, 220), max_jump=40) -> bool:
 
 
 def flatten_shift(rpe):
+    """Compute per-column vertical shift (linear trend of RPE) used to flatten a B-scan."""
     x = np.arange(len(rpe))
     trend = np.polyval(np.polyfit(x, rpe, 1), x)
     return (trend - trend.mean()).astype(np.float32)
 
 
 def warp_flatten(img, shift_rows):
+    """Shift each column of img vertically by shift_rows to flatten the retina."""
     H, W = img.shape
     src = np.clip(np.round(np.arange(H)[:, None] + shift_rows[None, :]).astype(int), 0, H - 1)
     cols = np.broadcast_to(np.arange(W), (H, W))
@@ -71,6 +76,7 @@ def warp_flatten(img, shift_rows):
 
 
 def build_cond(ilm, rpe, H=None, W=None, horig=None):
+    """Render the ILM/RPE boundary lines into a condition map image for the diffusion model."""
     ot = CFG.oct_tier1
     H = H or ot.diff_h
     W = W or ot.diff_w
@@ -86,6 +92,7 @@ def build_cond(ilm, rpe, H=None, W=None, horig=None):
 
 
 def load_retfound_encoder(weights_path: Path | None = None):
+    """Load a pretrained RETFound ViT encoder for fundus embedding, stripping head/decoder weights."""
     weights_path = weights_path or CFG.paths.retfound_weights
     enc = timm.create_model("vit_large_patch16_224", pretrained=False, num_classes=0, img_size=224)
     ck = torch.load(weights_path, map_location="cpu", weights_only=False)
@@ -109,6 +116,7 @@ def load_retfound_encoder(weights_path: Path | None = None):
 
 
 def _retfound_tf():
+    """Build (once) and cache the preprocessing transform for the RETFound encoder."""
     global _RETFOUND_TF
     if _RETFOUND_TF is None:
         _RETFOUND_TF = transforms.Compose([
@@ -121,6 +129,7 @@ def _retfound_tf():
 
 @torch.no_grad()
 def embed_fundus(enc, im):
+    """Encode a fundus image into a single feature vector (mean of patch tokens)."""
     dev = next(enc.parameters()).device
     x = _retfound_tf()(im.convert("RGB")).unsqueeze(0).to(dev)
     with torch.autocast("cuda", enabled=dev.type == "cuda"):
@@ -129,6 +138,7 @@ def embed_fundus(enc, im):
 
 
 def disc_crop(img, dx):
+    """Crop a square region around the optic disc, locating its vertical center from intensity profile."""
     g = np.asarray(img.convert("L"), float)
     H, W = g.shape
     dx = int(np.clip(dx, 0, W - 1))

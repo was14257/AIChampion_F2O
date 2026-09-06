@@ -1,7 +1,3 @@
-"""Before training the risk head (Step2), pre-extracts and caches the 6
-concepts from all G1020+ORIGA+GAMMA images. The seg/oct encoders are frozen,
-so there's no need to rerun them every epoch.
-"""
 import sys
 from pathlib import Path
 
@@ -23,6 +19,7 @@ OUT = CFG.paths.oct_features / "cbm_concepts.npz"
 
 
 def build_cbm(device: str) -> EyeonCBM:
+    """Load the frozen segmentation and OCT-linear encoders and assemble the CBM."""
     seg = build_model(load_weights=True)
     ck = torch.load(CFG.paths.ckpt_dir / "best.pth", map_location="cpu", weights_only=False)
     seg.load_state_dict(ck["model"])
@@ -41,6 +38,7 @@ def build_cbm(device: str) -> EyeonCBM:
 
 
 def main():
+    """Extract and cache the 6 concepts for all G1020+ORIGA+GAMMA images."""
     device = CFG.runtime.device
     cbm = build_cbm(device)
     pairs = all_pairs()

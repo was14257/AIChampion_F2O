@@ -12,6 +12,7 @@ from retfound_seg.model import build_model
 
 
 def _preprocess(img_path, device):
+    """Load an image file and prepare it as a normalized model input tensor."""
     size = CFG.data.img_size
     img = Image.open(img_path).convert("RGB").resize((size, size), Image.BILINEAR)
     arr = np.asarray(img, dtype=np.float32) / 255.0
@@ -23,17 +24,20 @@ def _preprocess(img_path, device):
 
 @torch.no_grad()
 def predict_label(model, img_tensor):
+    """Run the model and return a post-processed label map."""
     logits = model(img_tensor)
     pred = logits.argmax(dim=1)[0].cpu().numpy().astype(np.int64)
     return postprocess_label(pred)
 
 
 def _boundary(binary, thickness=3):
+    """Return the outline pixels of a binary mask via erosion."""
     eroded = ndimage.binary_erosion(binary, iterations=max(1, thickness))
     return binary & ~eroded
 
 
 def save_contour_overlay(img_path, label_map, out_path, thickness=3):
+    """Draw disc/cup contours on top of the original image and save it."""
     orig = Image.open(img_path).convert("RGB")
     W, H = orig.size
     rgb = np.asarray(orig).copy()
@@ -47,6 +51,7 @@ def save_contour_overlay(img_path, label_map, out_path, thickness=3):
 
 
 def main():
+    """Generate contour overlay images for a dataset split using the trained model."""
     device = torch.device(CFG.runtime.device)
     model = build_model(load_weights=False).to(device)
     ckpt = torch.load(CFG.infer.checkpoint_path, map_location=device, weights_only=False)

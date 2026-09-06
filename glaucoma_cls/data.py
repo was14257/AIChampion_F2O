@@ -46,6 +46,7 @@ def _letterbox_square(img: Image.Image) -> Image.Image:
 
 
 def _refuge():
+    """Loads REFUGE train image rows (label from filename prefix 'g')."""
     d = DATA / "REFUGE/train/Images"
     return [(str(p), 1 if p.stem.lower().startswith("g") else 0, "REFUGE")
             for p in sorted(d.glob("*.jpg"))]
@@ -68,6 +69,7 @@ def _refuge_val():
 
 
 def _origa():
+    """Loads ORIGA image rows with labels from OrigaList.csv."""
     df = pd.read_csv(DATA / "ORIGA/OrigaList.csv")
     d = DATA / "ORIGA/Images"
     out = []
@@ -79,6 +81,7 @@ def _origa():
 
 
 def _g1020():
+    """Loads G1020 image rows with labels from G1020.csv."""
     df = pd.read_csv(DATA / "G1020/G1020.csv")
     d = DATA / "G1020/Images"
     out = []
@@ -90,6 +93,7 @@ def _g1020():
 
 
 def _gamma_train():
+    """Loads GAMMA training image rows with labels from the grading GT excel."""
     df = pd.read_excel(GMM / "training/glaucoma_grading_training_GT.xlsx")
     out = []
     for _, r in df.iterrows():
@@ -102,6 +106,7 @@ def _gamma_train():
 
 
 def _gamma_test():
+    """Loads GAMMA test image paths (labels hidden), keyed by case_id."""
     d = GMM / "testing/multi-modality_images"
     out = []
     for cd in sorted(d.iterdir()):
@@ -256,8 +261,9 @@ def load_concept_table_v2():
 
 
 def grape_baseline_rows():
-    """GRAPE Baseline sheet(환자당 최초 방문 1장, 전원 glaucoma). 5-concept
-    RNFL 학습(fit_rnfl_pls.py)과 v2 classifier pool 양쪽에서 재사용."""
+    """Loads the GRAPE Baseline sheet (one first-visit image per patient, all
+    glaucoma). Reused by both the 5-concept RNFL training (fit_rnfl_pls.py)
+    and the v2 classifier pool."""
     import local_config as _lc
     root = _lc.GRAPE_ROOT
     df = pd.read_excel(root / "VF and clinical information.xlsx",
@@ -273,11 +279,12 @@ def grape_baseline_rows():
 
 
 def build_pool_v2(seed=42):
-    """v2 classifier용 통합 pool: GAMMA_train(100) + REFUGE train(400) +
-    GRAPE baseline(263) 전체를 하나의 DataFrame으로 묶는다(leakage 방지를
-    위해 GAMMA_train만 val로 쓰던 build_frames()와 달리, val도 이 pool
-    전체에서 stratified로 뽑는 방식 - 2026-08-09 사용자 요청). glaucoma_ratio
-    유지를 위해 실제 split은 StratifiedKFold(pool, pool["label"])로 호출부에서 수행."""
+    """Builds the unified pool for the v2 classifier: GAMMA_train(100) +
+    REFUGE train(400) + GRAPE baseline(263) combined into one DataFrame
+    (unlike build_frames(), which only uses GAMMA_train as val to avoid
+    leakage, here val is also stratified-sampled from this whole pool -
+    2026-08-09 per user request). To preserve glaucoma_ratio, the actual
+    split is done by the caller via StratifiedKFold(pool, pool["label"])."""
     gamma = pd.DataFrame(_gamma_train(), columns=["path", "label", "dataset", "case_id"])
     gamma = gamma[["path", "label", "dataset"]]
     refuge = pd.DataFrame(_refuge(), columns=["path", "label", "dataset"])
@@ -287,6 +294,7 @@ def build_pool_v2(seed=42):
 
 
 def _concept_vecs(df, concept_table, n_concepts, key_col="path", key_fn=None):
+    """Looks up each row's concept vector from concept_table, filling missing entries with zeros."""
     zero_raw = np.zeros(n_concepts, dtype="float32")
     key_fn = key_fn or (lambda p: Path(p).name)
     return np.stack([concept_table.get(key_fn(v), zero_raw) for v in df[key_col]])
@@ -330,6 +338,7 @@ def attach_concepts_external(df, concept_table, n_concepts, mean, std,
 
 
 class FundusDS(Dataset):
+    """Fundus image dataset; applies train/eval transforms and optionally attaches concept vectors."""
 
     def __init__(self, df, img_size=224, train=False, with_label=True, use_concepts=False):
         self.df = df.reset_index(drop=True)
@@ -358,9 +367,11 @@ class FundusDS(Dataset):
             ])
 
     def __len__(self):
+        """Number of samples."""
         return len(self.df)
 
     def __getitem__(self, i):
+        """Loads and transforms one image, returning (img[, concept], label_or_case_id)."""
         r = self.df.iloc[i]
         img = self.tf(Image.open(r["path"]).convert("RGB"))
         if self.use_concepts:
@@ -375,12 +386,14 @@ class FundusDS(Dataset):
 
 
 def class_weights(df):
+    """Ratio of negative to positive samples, used as pos_weight for BCE loss."""
     n = (df["label"] == 0).sum()
     p = (df["label"] == 1).sum()
     return float(n / max(1, p))
 
 
 def loaders(ext, val, batch_size=64, img_size=224, num_workers=4, use_concepts=False):
+    """Builds train/val DataLoaders from the ext/val frames."""
     # On Windows, persistent_workers=False (the default) recreates workers
     # every epoch, which effectively hangs with a "Couldn't open shared
     # event" error. persistent_workers=True reuses workers across epochs

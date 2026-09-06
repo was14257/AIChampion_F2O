@@ -1,21 +1,3 @@
-"""GRAPE(244장, 실측 OCT RNFL Mean/S/N/I/T 보유)로 fundus embedding -> RNFL
-thickness 회귀를 학습한다. GAMMA 172장 hand-labeled 학습(fit_oct_linear.py)의
-대체재: GRAPE는 표본이 더 많고(244 vs 172) 전원 녹내장이라 더 넓은 중증도
-범위(RNFL 저하가 심한 쪽)를 커버한다.
-
-seg_model로 disc 위치를 잡아 disc crop을 만들고, whole+disc embedding(224
-encoder)을 concat해 PLS 회귀를 적용한다 (fit_oct_linear.py와 동일 방식).
-
-5-fold CV 결과(2026-08-09): mean_th r=0.828, S r=0.763, I r=0.766, T r=0.725
-모두 baseline(평균만 예측)보다 뚜렷이 우수. N(비강측)만 r=0.393으로 약함 -
-N은 사분면 중 개인차(std)가 가장 작고 다른 사분면과의 상관도 가장 낮아
-(정상군에서도 임상적으로 가장 늦게 손상되는 부위), fundus로 예측하기 어려운
-게 자연스럽다.
-
-GRAPE 내부 CV에서는 좋은 성능을 보이지만, GRAPE(전원 중증 녹내장, RNFL
-44~119 낮은 범위)와 REFUGE/GAMMA(정상~경증 포함, 더 넓은 분포) 간 도메인
-시프트가 있어 절대값은 GRAPE 분포 쪽으로 편향될 수 있다 - 순위(상관) 정보로
-활용하는 것이 안전하다."""
 import sys
 from pathlib import Path
 
@@ -42,6 +24,7 @@ OUT_PKL = CFG.paths.oct_features / "grape_rnfl_pls.pkl"
 
 
 def load_grape_gt():
+    """Load GRAPE baseline RNFL ground truth (mean/S/N/I/T) and matching CFP paths."""
     df = pd.read_excel(XLSX, sheet_name="Baseline", header=None, skiprows=2)
     out = df[[16, 11, 12, 13, 14, 15]].copy()
     out.columns = ["filename"] + TARGETS
@@ -54,6 +37,7 @@ def load_grape_gt():
 
 
 def disc_x_from_mask(label_map, img_w, fallback_ratio=0.5):
+    """Estimate the disc's x-center from a segmentation mask, falling back to image center."""
     disc = label_map >= 1
     if disc.sum() == 0:
         return int(img_w * fallback_ratio)
@@ -63,6 +47,7 @@ def disc_x_from_mask(label_map, img_w, fallback_ratio=0.5):
 
 
 def preprocess_for_seg(img, device):
+    """Resize and normalize an image into a tensor batch for the segmentation model."""
     size = CFG.data.img_size
     arr = np.asarray(img.resize((size, size), Image.BILINEAR), dtype=np.float32) / 255.0
     t = torch.from_numpy(arr).permute(2, 0, 1)
@@ -73,6 +58,7 @@ def preprocess_for_seg(img, device):
 
 
 def extract_embeddings(paths, seg_model, oct_enc):
+    """Compute whole-image and disc-crop embeddings for each fundus path, using seg-predicted disc location."""
     Wh, Di = [], []
     for p in paths:
         img = Image.open(p).convert("RGB")
@@ -87,6 +73,13 @@ def extract_embeddings(paths, seg_model, oct_enc):
 
 
 def main():
+    """Train a PLS regression from fundus embeddings to GRAPE RNFL thickness, report 5-fold CV, and save the final model.
+
+    GRAPE (244 images, measured OCT RNFL) replaces the smaller GAMMA hand-labeled
+    fit (fit_oct_linear.py) and covers more severe glaucoma cases. Note: GRAPE is
+    all-glaucoma with a lower RNFL range than REFUGE/GAMMA, so there is a domain
+    shift - treat predictions as relative (correlation) rather than absolute values.
+    """
     gt = load_grape_gt()
     print(f"GRAPE 실측 RNFL 보유: {len(gt)}장")
 
@@ -136,7 +129,7 @@ def main():
         print(f"{t:<10} RMSE={np.sqrt(mse_m):6.2f}±{np.sqrt(mse_s):.2f}  "
               f"r={r_m:.3f}±{r_s:.3f}  baseline_RMSE={np.sqrt(base_m):.2f}")
 
-    # 최종적으로 244장 전체로 fit -> 저장 (REFUGE/GAMMA pseudo-label 생성용)
+    # Final fit on all data, saved for REFUGE/GAMMA pseudo-label generation
     scaler = StandardScaler().fit(X)
     Xs = scaler.transform(X)
     pls_final = PLSRegression(n_components=8).fit(Xs, Y)

@@ -1,10 +1,6 @@
-"""Builds a PDF report from EYEON analysis results. Takes the result dict from
-app_streamlit.py's run_analysis() as-is and renders it in a hospital-report
-style: header (logo+patient info) / overall verdict badge / KPI / quantitative
-metrics table / images / disclaimer. Registers Windows' default Malgun Gothic
-font (malgun.ttf/malgunbd.ttf) to render Korean text."""
 import io
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
@@ -22,8 +18,9 @@ from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 
 from glaucoma_cls.concepts import ALL_CONCEPTS, CONCEPT_META
 
-pdfmetrics.registerFont(TTFont("Malgun", "C:/Windows/Fonts/malgun.ttf"))
-pdfmetrics.registerFont(TTFont("Malgun-Bold", "C:/Windows/Fonts/malgunbd.ttf"))
+_FONT_DIR = Path("C:/Windows/Fonts")
+pdfmetrics.registerFont(TTFont("Malgun", str(_FONT_DIR / "malgun.ttf")))
+pdfmetrics.registerFont(TTFont("Malgun-Bold", str(_FONT_DIR / "malgunbd.ttf")))
 
 NAVY = colors.HexColor("#0f2b46")
 SLATE = colors.HexColor("#3d4a57")
@@ -53,6 +50,7 @@ _CAP = ParagraphStyle("Cap", fontName="Malgun", fontSize=7.8, leading=11, textCo
 
 
 def _np_to_rlimage(arr: np.ndarray, width_mm=52):
+    """Convert a numpy image array into a reportlab Image flowable, scaled to width_mm."""
     if arr.dtype != np.uint8:
         arr = arr.astype(np.uint8)
     im = Image.fromarray(arr)
@@ -118,6 +116,7 @@ def _header(canvas, doc, patient_name, exam_date, report_id):
 
 
 def _grade_badge_table(grade, cls, headline, risk_disp, ci_lo, ci_hi):
+    """Two-column badge: verdict grade/headline on the left, risk score/CI on the right."""
     color = GRADE_COLORS[cls]
     bg = GRADE_BG[cls]
     label_style = ParagraphStyle("gradeLabel", fontName="Malgun", fontSize=8.5, textColor=MUTED)
@@ -146,6 +145,7 @@ def _grade_badge_table(grade, cls, headline, risk_disp, ci_lo, ci_hi):
 
 
 def _kpi_row(concept, conf_txt, thr_txt):
+    """Three-cell KPI strip: vertical C/D ratio, prediction confidence, and the decision threshold."""
     cdr = concept.get("cdr", float("nan"))
     cdr_flag = "정상범위 초과" if cdr >= 0.6 else "정상범위"
     cdr_color = colors.HexColor("#d6483f") if cdr >= 0.6 else colors.HexColor("#2e9e6b")

@@ -1,13 +1,3 @@
-"""Extracts the 9 concept types for GAMMA test's (labels hidden, challenge
-target) 100 images and saves them separately in the same format as
-cbm_concepts.npz.
-
-extract_concepts.py's all_pairs() only covers labeled GAMMA training, so the
-test (target) images' concepts aren't in the cache - since glaucoma_cls's
-fundus classification switched to using concepts, the actual deployment
-(GAMMA test pseudo-label generation) also needs the same concepts, so we
-extract them separately here. y is not saved since there are no labels.
-"""
 import sys
 from pathlib import Path
 
@@ -23,12 +13,14 @@ OUT = CFG.paths.oct_features / "cbm_concepts_gamma_test.npz"
 
 
 def gamma_test_paths():
+    """List (path, case_id) pairs for GAMMA test (label-hidden) fundus images."""
     root = CFG.paths.gamma_grading / "testing/multi-modality_images"
     return [(str(cd / f"{cd.name}.jpg"), cd.name)
             for cd in sorted(root.iterdir()) if cd.is_dir()]
 
 
 def main():
+    """Extract and cache concepts for GAMMA test images (no labels, saved separately)."""
     device = CFG.runtime.device
     cbm = build_cbm(device)
     pairs = gamma_test_paths()

@@ -10,6 +10,7 @@ from retfound_seg.model import build_model
 
 
 def load_seg_model(ckpt_path: Path, device: torch.device):
+    """Load a trained segmentation model checkpoint."""
     model = build_model(load_weights=False).to(device)
     ckpt = torch.load(ckpt_path, map_location=device)
     state = ckpt.get("model", ckpt)
@@ -25,6 +26,7 @@ _STD  = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
 @torch.no_grad()
 def predict_disc_mask(model, img_pil: Image.Image, seg_size: int,
                       device: torch.device) -> np.ndarray:
+    """Predict the optic disc binary mask for an image, resized back to original size."""
     orig_w, orig_h = img_pil.size
 
     img_resized = img_pil.resize((seg_size, seg_size), Image.BILINEAR)
@@ -46,6 +48,7 @@ def predict_disc_mask(model, img_pil: Image.Image, seg_size: int,
 
 def disc_bbox_crop(img_pil: Image.Image, disc_mask: np.ndarray,
                    margin: float = 1.5) -> Image.Image:
+    """Crop a square region around the disc mask (with margin), or center-crop as fallback."""
     w, h = img_pil.size
     ys, xs = np.where(disc_mask)
 
@@ -80,6 +83,7 @@ def disc_bbox_crop(img_pil: Image.Image, disc_mask: np.ndarray,
 
 
 def crop_all(margin: float = 1.5, out_size: int = 448):
+    """Run disc detection + cropping over all GRAPE CFP images and save the results."""
     device = torch.device(CFG.runtime.device)
     seg_size = CFG.data.img_size
     ckpt_path = CFG.infer.checkpoint_path

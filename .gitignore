@@ -17,6 +17,10 @@ env/
 # 로컬 설정
 local_config.py
 
+# 실험용 임시 폴더 (git에 올리지 않음)
+age_gen/
+temp/
+
 # OS / 에디터
 .DS_Store
 Thumbs.db
